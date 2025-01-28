@@ -18,9 +18,11 @@ class Recognizer(nn.Module):
 
     def __init__(self, cfg: dict, tokenizer: Tokenizer):
         super().__init__()
+        assert len(tokenizer) == cfg["vocab_size"]
+
         self.encoder = Encoder(cfg["encoder"])
-        self.embedding = nn.Embedding(cfg["vocab_size"], cfg["encoder"]["block"]["dim"])
-        self.decoder = Decoder(cfg["decoder"], self.encoder.expansion_factor)
+        self.embedding = nn.Embedding(cfg["vocab_size"], cfg["encoder"]["block"]["dim"]*self.encoder.expansion_factor)
+        self.decoder = Decoder(cfg["decoder"], self.encoder.expansion_factor, cfg["vocab_size"])
 
         self.tokenizer = tokenizer
         self.confidence_threshold = cfg["confidence_threshold"]
@@ -35,7 +37,8 @@ class Recognizer(nn.Module):
             torch.Tensor: with shape [B,C,L]
             """
         encoder_tokens = self.encoder(input)
-        decoder_tokens = self.decoder(torch.cat((encoder_tokens, self.embedding(target)), 1))
+        target_embeddings = torch.permute(self.embedding(target), (0,2,1))
+        decoder_tokens = self.decoder(torch.cat((encoder_tokens, target_embeddings), 2))
         return decoder_tokens  # type:ignore
 
     def generate(self, encoder_tokens: torch.Tensor, batch_size: int):
@@ -110,11 +113,13 @@ class Encoder(nn.Module):
             padding=3,
             bias=False,
         )
-        self.layers = nn.ModuleList()
+
         expansion_factor = 1
+        self.layers = nn.ModuleList()
         for layer in layers:
             self.layers.append(SSMLayer(layer, expansion_factor, cfg["layers"]["downscale"], cfg["block"]))
-            expansion_factor *= 2
+            if cfg["layers"]["downscale"]:
+                expansion_factor *= 2
         self.expansion_factor = expansion_factor
 
     def forward(self, image: torch.Tensor) -> torch.Tensor:
@@ -127,7 +132,7 @@ class Encoder(nn.Module):
         """
         image = self.conv1(image)
         image = self.conv2(image)
-        tokens = self.merge_channel_height(image)
+        tokens = image_to_sequence(image)
         for layer in self.layers:
             tokens = layer(tokens)
         return tokens # type:ignore
@@ -137,7 +142,7 @@ class Decoder(nn.Module):
     """Implements decoder with multiple layers of mamba blocks, a language head and embeddings autoregressive
     processing of previous outputs."""
 
-    def __init__(self, cfg: dict, encoder_expansion: int):
+    def __init__(self, cfg: dict, encoder_expansion: int, vocab_size: int):
         """Creates ssm layers with an initial downscaling 2d convolution."""
         super().__init__()
         layers: List[int] = cfg["layers"]["num_blocks"]
@@ -146,9 +151,10 @@ class Decoder(nn.Module):
         expansion_factor = encoder_expansion
         for layer in layers:
             self.layers.append(SSMLayer(layer, expansion_factor, cfg["layers"]["downscale"], cfg["block"]))
-            expansion_factor *= 2
+            if cfg["layers"]["downscale"]:
+                expansion_factor *= 2
         self.bn = torch.nn.BatchNorm1d(cfg["block"]["dim"] * expansion_factor)
-        self.lm_head = nn.Linear(cfg["block"]["dim"], cfg["vocab_size"], bias=False)
+        self.lm_head = torch.nn.Conv1d(cfg["block"]["dim"] * expansion_factor, vocab_size, 1, bias=False)
 
     def forward(self, tokens: torch.Tensor) -> torch.Tensor:
         """
@@ -233,11 +239,12 @@ class SSMBlock(nn.Module):
             d_state=cfg["state"],  # SSM state expansion factor, typically 64 or 128
             d_conv=cfg["conv_width"],  # Local convolution width
             expand=cfg["expand"],  # Block expansion factor
+            headdim=cfg["dim"], # d_model needs to be a multiple of headdim
             layer_idx=0  # default id for accessing inference cache.
         ))
         self.norm = torch.nn.BatchNorm1d(channels)
 
-        self.feed_forward = self.FeedForward(channels, channels * cfg["expand"])
+        self.feed_forward = FeedForward(channels, channels * cfg["expand"])
         self.inference_params: Optional[InferenceParams] = None
 
     def forward(self, tokens: torch.Tensor) -> torch.Tensor:

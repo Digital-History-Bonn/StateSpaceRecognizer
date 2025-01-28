@@ -72,10 +72,9 @@ class SSMOCRTrainer(lightning.LightningModule):
         start_token = self.model.tokenizer.single_token('<START>')
 
         pred = self.model(image, target)
-        pred = torch.nn.functional.softmax(self.decoder(pred), dim=1)
-        diff = len(pred) - len(target) # todo: batch dimension!
+        diff = pred.shape[-1] - target.shape[-1]
         target = torch.cat((torch.full([diff], start_token), target), 1)
-        loss = cross_entropy(pred, one_hot_encoding(target, len(self.model.tokenizer)))
+        loss = cross_entropy(pred, target)
         return loss
 
     def validation_step(self, batch):

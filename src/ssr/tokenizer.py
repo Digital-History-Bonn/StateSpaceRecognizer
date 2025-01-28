@@ -30,7 +30,7 @@ class Tokenizer(ABC):
         pass
 
     @abstractmethod
-    def __len(self) -> int:
+    def __len__(self) -> int:
         """Returns length of alphabet."""
         pass
 

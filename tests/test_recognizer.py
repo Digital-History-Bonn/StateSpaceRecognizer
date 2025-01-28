@@ -18,11 +18,11 @@ class TestRecognizer:
     @pytest.fixture(scope='class', autouse=True)
     def setup(self):
         # Initialize shared attributes once for the class
-        pytest.ressource_path = Path(os.path.join(os.path.dirname(__file__), "tests/resources"))
+        pytest.ressource_path = Path(os.path.join(os.path.dirname(__file__), "ressources"))
         with open(pytest.ressource_path / "recognizer.yml", "r") as file:
             pytest.cfg = yaml.safe_load(file)
         pytest.tokenizer = TestTokenizer()
-        pytest.recognizer = Recognizer(pytest.cfg, pytest.tokenizer)
+        pytest.recognizer = Recognizer(pytest.cfg, pytest.tokenizer).cuda()
 
     def test_image_to_sequence(self):
         """Image to sequence conversion is done by flattening the C and H dimension of an [B,C,H,W] image.
@@ -36,7 +36,7 @@ class TestRecognizer:
                                       [11, 12],
                                       [13, 14],
                                       [15, 16]]])
-        assert image_to_sequence(data) == groung_truth
+        assert torch.all(image_to_sequence(data) == groung_truth)
 
     def test_feed_forward(self):
         """Test feed forward, forward pass."""
@@ -44,59 +44,54 @@ class TestRecognizer:
         ground_truth = (1, model_dim, 17)
 
         data = torch.zeros(ground_truth)
-        ff = FeedForward(model_dim=model_dim)
+        ff = FeedForward(model_dim=model_dim, hidden_dim=model_dim*8)
         result = ff(data)
         assert result.shape == ground_truth
 
     def test_layer(self):
         """Test the SSMLayer forward pass. One test for the encoder version with downscaling and one for the decoder
         version without downscaling."""
-        shape = (2, 160, 50)
-        input_data = torch.ones(shape)
+        shape = (2, 32, 50)
+        input_data = torch.ones(shape).cuda()
 
         result = pytest.recognizer.encoder.layers[0](input_data)
 
-        assert result.shape == (2, 320, 25)
+        assert result.shape == (2, 64, 25)
 
-        shape = (2, 1280, 6)
-        input_data = torch.ones(shape)
+        shape = (2, 256, 7)
+        input_data = torch.ones(shape).cuda()
 
         result = pytest.recognizer.decoder.layers[0](input_data)
 
-        assert result.shape == (2, 1280, 6)
+        assert result.shape == (2, 256, 7)
 
     def test_encoder(self):
         """Test the encoder forward pass."""
-        shape = (2, 1, 40, 200)
-        input_data = torch.ones(shape)
+        shape = (2, 1, 32, 200)
+        input_data = torch.ones(shape).cuda()
 
         result = pytest.recognizer.encoder(input_data)
 
-        assert result.shape == (2, 1280, 6)
+        assert result.shape == (2, 256, 7)
 
     def test_recognizer(self):
         """Test the recognizer forward pass."""
-        shape = (2, 1, 40, 200)
-        input_data = torch.ones(shape)
-        target = torch.tensor([5, 5, 4, 4, 6, 6])
+        torch.manual_seed(42)
+        shape = (2, 1, 32, 200)
+        input_data = torch.ones(shape).cuda()
+        target = torch.tensor([[5, 5, 4, 4, 6, 6], [5, 4, 4, 4, 5, 6]]).cuda()
 
-        result = torch.nn.functional.softmax(pytest.recognizer(input_data, target), dim=1)
+        result = torch.argmax(torch.nn.functional.softmax(pytest.recognizer(input_data, target), dim=1), dim=1)
         result_batch = [pytest.tokenizer.to_text(result[0]), pytest.tokenizer.to_text(result[1])]
 
-        assert result.shape == (2, 12)
-        assert len(result_batch[0]) == 12 and len(result_batch[1]) == 12
+        assert result.shape == (2, 13)
+        assert len(result_batch[0]) >= 13
+        assert len(result_batch[1]) >= 13
 
 
 class TestTokenizer(Tokenizer):
     def __init__(self):
         super().__init__(['<PAD>', '<START>', '<NAN>', '<END>', 'a', 'b', 'c'])
-
-    def __len__(self) -> int:
-        """
-        Returns:
-            int: the number of tokens
-        """
-        return len(self.alphabet)
 
     def __call__(self, text: str) -> torch.Tensor:
         """
@@ -111,6 +106,13 @@ class TestTokenizer(Tokenizer):
         for char in text:
             result.append(self.single_token(char))
         return torch.tensor(result)
+
+    def __len__(self) -> int:
+        """
+        Returns:
+            int: the number of tokens
+        """
+        return len(self.alphabet)
 
     def single_token(self, input: str) -> int:
         """
