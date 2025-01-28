@@ -74,6 +74,19 @@ class Recognizer(nn.Module):
         return [self.tokenizer.to_text(torch.tensor(result)) for result in result_tokens]
 
 
+def image_to_sequence(image: torch.Tensor) -> torch.Tensor:
+    """
+    Merge channel and height dimension of an image, such that the resulting sequence preserves the x-axis order.
+    Args:
+        image(torch.Tensor): [B,C,H,W]
+
+    Returns:
+        torch.Tensor: sequence of [B,C,L]
+
+    """
+    return image.flatten(1, 2)
+
+
 class Encoder(nn.Module):
     """Implements encoder with multiple layers of mamba blocks and an initial downscaling convolution."""
 
@@ -114,10 +127,10 @@ class Encoder(nn.Module):
         """
         image = self.conv1(image)
         image = self.conv2(image)
-        tokens = image.flatten(1, 2)
+        tokens = self.merge_channel_height(image)
         for layer in self.layers:
             tokens = layer(tokens)
-        return tokens
+        return tokens # type:ignore
 
 
 class Decoder(nn.Module):
@@ -169,13 +182,14 @@ class SSMLayer(nn.Module):
         """Creates multiple mamba blocks and an initial downscaling convolution."""
         super().__init__()
         channels = block_config["dim"] * layer_factor
+        self.downscale = downscale
         if downscale:
             self.conv = nn.Conv1d(
                 channels,
                 channels * 2,
-                kernel_size=7,
+                kernel_size=3,
                 stride=2,
-                padding=3,
+                padding=1,
                 bias=False,
             )
             channels *= 2
@@ -191,8 +205,8 @@ class SSMLayer(nn.Module):
         Returns:
             tokens: tokens with shape [B,C,L]
         """
-
-        tokens = self.conv(tokens)
+        if self.downscale:
+            tokens = self.conv(tokens)
         for block in self.blocks:
             tokens = block(tokens)
         return tokens
