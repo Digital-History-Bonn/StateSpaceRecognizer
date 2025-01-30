@@ -1,3 +1,5 @@
+from typing import Tuple
+
 import lightning
 import torch
 from torch import optim
@@ -59,11 +61,11 @@ class SSMOCRTrainer(lightning.LightningModule):
 
     def training_step(self, batch):
         image, target, _ = batch
-        loss = self.run_model(image, target)
+        loss, _ = self.run_model(image, target)
         self.log("train_loss", loss)
         return loss
 
-    def run_model(self, image: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+    def run_model(self, image: torch.Tensor, target: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Predict input image and calculate loss. The target is modified, so that it consists out of start token for
         the same length as the encoder result. Only after the encoder results have been processed, the actual output
@@ -75,17 +77,18 @@ class SSMOCRTrainer(lightning.LightningModule):
         diff = pred.shape[-1] - target.shape[-1]
         target = torch.cat((torch.full([diff], start_token), target), 1)
         loss = cross_entropy(pred, target)
-        return loss
+        return loss, pred[:, diff:, :]
 
-    def validation_step(self, batch):
-        image, target, _ = batch
-        loss = self.run_model(image, target)
-        self.log("val_loss", loss)
+    def validation_step(self, batch: torch.Tensor):
+        self.evaluate_prediction(batch, "val")
 
-    def test_step(self, batch):
-        image, target, _ = batch
-        loss = self.run_model(image, target)
-        self.log("test_loss", loss)
+    def test_step(self, batch: torch.Tensor):
+        self.evaluate_prediction(batch, "test")
+
+    def evaluate_prediction(self, batch: torch.Tensor, name: str):
+        image, target, texts = batch
+        loss, _ = self.run_model(image, target)
+        self.log(f"{name}_loss", loss)
 
     def configure_optimizers(self):
         optimizer = optim.AdamW(self.parameters(), lr=3e-4, weight_decay=1e-05)
