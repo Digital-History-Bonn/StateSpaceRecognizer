@@ -30,10 +30,14 @@ def collate_fn(batch):
         if crop.shape[-1] < max_width:
             transform = transforms.Pad((max_width - crop.shape[-1], 0, 0, 0))
             padded_crops.append(transform(crop))
+        else:
+            padded_crops.append(crop)
         if len(target) < max_length:
             # value 0 is always the '<PAD>' token
             transform = ConstantPad1d((0, max_length - len(target)), 0)
             padded_targets.append(transform(target))
+        else:
+            padded_targets.append(target)
     return torch.stack(padded_crops), torch.stack(padded_targets), texts
 
 
@@ -55,14 +59,16 @@ class SSMOCRTrainer(lightning.LightningModule):
     """Lightning module for image recognition training. Predict step returns a source object from the dataset as well as
     the softmax prediction."""
 
-    def __init__(self, model):
+    def __init__(self, model, batch_size: int):
         super().__init__()
         self.model = model
+        self.batch_size = batch_size
 
     def training_step(self, batch):
         image, target, _ = batch
         loss, _ = self.run_model(image, target)
-        self.log("train_loss", loss)
+        self.log("train_loss", loss, batch_size=self.batch_size)
+        loss.requires_grad = True
         return loss
 
     def run_model(self, image: torch.Tensor, target: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -71,13 +77,15 @@ class SSMOCRTrainer(lightning.LightningModule):
         the same length as the encoder result. Only after the encoder results have been processed, the actual output
         starts.
         """
+        image = image.cuda()
+        target = target.cuda()
         start_token = self.model.tokenizer.single_token('<START>')
 
         pred = self.model(image, target)
         diff = pred.shape[-1] - target.shape[-1]
-        target = torch.cat((torch.full([diff], start_token), target), 1)
+        target = torch.cat((torch.full((target.shape[0], diff), start_token).cuda(), target), 1)
         loss = cross_entropy(pred, target)
-        return loss, pred[:, diff:, :]
+        return loss.detach().cpu(), pred[:, diff:, :].detach().cpu()
 
     def validation_step(self, batch: torch.Tensor):
         self.evaluate_prediction(batch, "val")
@@ -88,7 +96,7 @@ class SSMOCRTrainer(lightning.LightningModule):
     def evaluate_prediction(self, batch: torch.Tensor, name: str):
         image, target, texts = batch
         loss, _ = self.run_model(image, target)
-        self.log(f"{name}_loss", loss)
+        self.log(f"{name}_loss", loss, batch_size=self.batch_size)
 
     def configure_optimizers(self):
         optimizer = optim.AdamW(self.parameters(), lr=3e-4, weight_decay=1e-05)

@@ -91,7 +91,10 @@ class TestRecognizer:
 
 class TestTokenizer(Tokenizer):
     def __init__(self):
-        super().__init__(['<PAD>', '<START>', '<NAN>', '<END>', 'a', 'b', 'c'])
+        alphabet = ['<PAD>', '<START>', '<NAN>', '<END>', 'a', 'b', 'c']
+        super().__init__({token: i for i, token in enumerate(alphabet)})
+        self.alphabet = dict(enumerate(alphabet))
+
 
     def __call__(self, text: str) -> torch.Tensor:
         """

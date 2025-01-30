@@ -6,7 +6,7 @@ from torch import nn
 from mamba_ssm import Mamba2
 from mamba_ssm.utils.generation import InferenceParams
 
-from src.ssr.tokenizer import Tokenizer
+from ssr.tokenizer import Tokenizer
 
 
 def create_empty_dict(length: int):
@@ -18,7 +18,8 @@ class Recognizer(nn.Module):
 
     def __init__(self, cfg: dict, tokenizer: Tokenizer):
         super().__init__()
-        assert len(tokenizer) == cfg["vocab_size"]
+        cfg["vocab_size"] += 4
+        assert len(tokenizer) == cfg["vocab_size"], """tokenizer length does not match with config['vocab_size']"""
 
         self.encoder = Encoder(cfg["encoder"])
         self.embedding = nn.Embedding(cfg["vocab_size"], cfg["encoder"]["block"]["dim"]*self.encoder.expansion_factor)

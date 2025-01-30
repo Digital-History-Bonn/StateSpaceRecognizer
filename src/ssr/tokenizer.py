@@ -1,19 +1,19 @@
 """Module for abstract class Tokenizer"""
 from abc import ABC, abstractmethod
-from typing import List
+from typing import List, Dict
 
 import torch
 
 
 class Tokenizer(ABC):
-    def __init__(self, alphabet: List[str]):
+    def __init__(self, alphabet: Dict[str, int]):
         """
         Tokenizer for OCR.
         Args:
             alphabet(List[str]): alphabet for tokenization. '<PAD>', '<START>', '<NAN>', '<END>' token are
             required to have indices 0,1,2,3."""
-        assert alphabet[0] == '<PAD>' and alphabet[1] == '<START>' and alphabet[2] == '<NAN>' and alphabet[
-            3] == '<END>', ("Tokenizer alphabet is required to have '<PAD>', '<START>', "
+        assert alphabet['<PAD>'] == 0 and alphabet['<START>'] == 1 and alphabet['<NAN>'] == 2 and alphabet[
+            '<END>'] == 3, ("Tokenizer alphabet is required to have '<PAD>', '<START>', "
                             "'<NAN>', '<END>' tokens with indices 0,1,2,3.")
         self.alphabet = alphabet
 
