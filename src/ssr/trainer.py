@@ -7,6 +7,8 @@ from torch.nn import ConstantPad1d
 from torch.nn.functional import cross_entropy, one_hot
 from torchvision import transforms
 
+from ssr import Tokenizer
+
 
 def collate_fn(batch):
     """Custom collate function, that pads crops horizontally to fit them all in one tensor batch."""
@@ -59,10 +61,11 @@ class SSMOCRTrainer(lightning.LightningModule):
     """Lightning module for image recognition training. Predict step returns a source object from the dataset as well as
     the softmax prediction."""
 
-    def __init__(self, model, batch_size: int):
+    def __init__(self, model, batch_size: int, tokenizer: Tokenizer):
         super().__init__()
         self.model = model
         self.batch_size = batch_size
+        self.tokenizer = tokenizer
 
     def training_step(self, batch):
         image, target, _ = batch
@@ -79,7 +82,7 @@ class SSMOCRTrainer(lightning.LightningModule):
         """
         image = image.cuda()
         target = target.cuda()
-        start_token = self.model.tokenizer.single_token('<START>')
+        start_token = self.tokenizer.single_token('<START>')
 
         pred = self.model(image, target)
         diff = pred.shape[-1] - target.shape[-1]
