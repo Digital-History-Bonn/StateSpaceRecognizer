@@ -16,16 +16,12 @@ def create_empty_dict(length: int):
 class Recognizer(nn.Module):
     """Implements OCR model composed of a visual encoder and a sequence decoder."""
 
-    def __init__(self, cfg: dict, tokenizer: Tokenizer):
+    def __init__(self, cfg: dict):
         super().__init__()
-        cfg["vocab_size"] += 4
-        assert len(tokenizer) == cfg["vocab_size"], """tokenizer length does not match with config['vocab_size']"""
-
         self.encoder = Encoder(cfg["encoder"])
         self.embedding = nn.Embedding(cfg["vocab_size"], cfg["encoder"]["block"]["dim"]*self.encoder.expansion_factor)
         self.decoder = Decoder(cfg["decoder"], self.encoder.expansion_factor, cfg["vocab_size"])
 
-        self.tokenizer = tokenizer
         self.confidence_threshold = cfg["confidence_threshold"]
 
     def forward(self, input: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
@@ -42,16 +38,16 @@ class Recognizer(nn.Module):
         decoder_tokens = self.decoder(torch.cat((encoder_tokens, target_embeddings), 2))
         return decoder_tokens  # type:ignore
 
-    def generate(self, encoder_tokens: torch.Tensor, batch_size: int):
+    def generate(self, encoder_tokens: torch.Tensor, batch_size: int, tokenizer: Tokenizer):
         """Generate OCR output at inference time. This is done
         in an autoregressive way, passing each output back to the model, and ends with an end token.
         Args:
             encoder_tokens(torch.Tensor): encoder processed tokens with shape [B,C,L]
         """
         # TODO: positional encodings?
-        start_token = self.tokenizer.single_token('<START>')
-        end_token = self.tokenizer.single_token('<END>')
-        nan_token = self.tokenizer.single_token('<NAN>')
+        start_token = tokenizer.single_token('<START>')
+        end_token = tokenizer.single_token('<END>')
+        nan_token = tokenizer.single_token('<NAN>')
         result_tokens = [[start_token]] * batch_size
         start_token = self.embedding(start_token)
         start_list = []
@@ -75,7 +71,7 @@ class Recognizer(nn.Module):
 
             if all(result[-1] == end_token for result in result_tokens):
                 break
-        return [self.tokenizer.to_text(torch.tensor(result)) for result in result_tokens]
+        return [tokenizer.to_text(torch.tensor(result)) for result in result_tokens]
 
 
 def image_to_sequence(image: torch.Tensor) -> torch.Tensor:
