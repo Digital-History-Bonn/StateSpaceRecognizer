@@ -70,7 +70,7 @@ class SSMOCRTrainer(lightning.LightningModule):
     def training_step(self, batch):
         image, target, _ = batch
         loss, _ = self.run_model(image, target)
-        self.log("train_loss", loss, batch_size=self.batch_size)
+        self.log("train_loss", loss, batch_size=self.batch_size, prog_bar=True, on_epoch=True, on_step=False)
         loss.requires_grad = True
         return loss
 
@@ -99,8 +99,8 @@ class SSMOCRTrainer(lightning.LightningModule):
     def evaluate_prediction(self, batch: torch.Tensor, name: str):
         image, target, texts = batch
         loss, _ = self.run_model(image, target)
-        self.log(f"{name}_loss", loss, batch_size=self.batch_size)
+        self.log(f"{name}_loss", loss, batch_size=self.batch_size, prog_bar=True, on_epoch=True, on_step=False)
 
     def configure_optimizers(self):
-        optimizer = optim.AdamW(self.parameters(), lr=3e-4, weight_decay=1e-05)
+        optimizer = optim.AdamW(self.parameters(), lr=1e-3, weight_decay=1e-05)
         return optimizer
