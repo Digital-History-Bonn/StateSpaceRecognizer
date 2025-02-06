@@ -240,6 +240,7 @@ class SSMBlock(nn.Module):
 
         self.ssm = (Mamba2(
             # This module uses roughly 3 * expand * d_model^2 parameters
+            # todo: tie channels to expansion and image height
             d_model=channels,  # Model dimension d_model
             d_state=cfg["state"],  # SSM state expansion factor, typically 64 or 128
             d_conv=cfg["conv_width"],  # Local convolution width
