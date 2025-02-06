@@ -5,6 +5,7 @@ import torch
 from torch import nn
 from mamba_ssm import Mamba2
 from mamba_ssm.utils.generation import InferenceParams
+from torchvision.transforms.functional import normalize
 
 from ssr.tokenizer import Tokenizer
 
@@ -18,11 +19,17 @@ class Recognizer(nn.Module):
 
     def __init__(self, cfg: dict):
         super().__init__()
+        self.cfg = cfg
         self.encoder = Encoder(cfg["encoder"])
         self.embedding = nn.Embedding(cfg["vocab_size"], cfg["encoder"]["block"]["dim"]*self.encoder.expansion_factor)
         self.decoder = Decoder(cfg["decoder"], self.encoder.expansion_factor, cfg["vocab_size"])
 
         self.confidence_threshold = cfg["confidence_threshold"]
+
+        # initialize normalization
+        self.register_buffer("means", torch.tensor([0.443])) # gray scale normalization for image data.
+        self.register_buffer("stds", torch.tensor([0.226])) # todo: put this into model config
+        self.normalize = normalize
 
     def forward(self, input: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
         """Forward pass for training with the target sequence as additional input for the decoder, after
@@ -33,6 +40,7 @@ class Recognizer(nn.Module):
         Returns:
             torch.Tensor: with shape [B,C,L]
             """
+        input = self.normalize(input)
         encoder_tokens = self.encoder(input)
         target_embeddings = torch.permute(self.embedding(target), (0,2,1))
         decoder_tokens = self.decoder(torch.cat((encoder_tokens, target_embeddings), 2))
