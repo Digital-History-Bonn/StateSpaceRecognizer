@@ -21,28 +21,28 @@ class Recognizer(nn.Module):
         super().__init__()
         self.cfg = cfg
         self.encoder = Encoder(cfg["encoder"])
-        self.embedding = nn.Embedding(cfg["vocab_size"], cfg["encoder"]["block"]["dim"]*self.encoder.expansion_factor)
+        self.embedding = nn.Embedding(cfg["vocab_size"], cfg["encoder"]["block"]["dim"] * self.encoder.expansion_factor)
         self.decoder = Decoder(cfg["decoder"], self.encoder.expansion_factor, cfg["vocab_size"])
 
         self.confidence_threshold = cfg["confidence_threshold"]
 
         # initialize normalization
-        self.register_buffer("means", torch.tensor([0.443])) # gray scale normalization for image data.
-        self.register_buffer("stds", torch.tensor([0.226])) # todo: put this into model config
+        self.register_buffer("means", torch.tensor([0.443]))  # gray scale normalization for image data.
+        self.register_buffer("stds", torch.tensor([0.226]))  # todo: put this into model config
         self.normalize = normalize
 
-    def forward(self, input: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+    def forward(self, image: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
         """Forward pass for training with the target sequence as additional input for the decoder, after
         processed through the embedding layer.
         Args:
-            input: Image data with shape[B,C,H,W]
+            image: Image data with shape[B,C,H,W]
             target: token ids with shape [B,L]
         Returns:
             torch.Tensor: with shape [B,C,L]
             """
-        input = self.normalize(input)
-        encoder_tokens = self.encoder(input)
-        target_embeddings = torch.permute(self.embedding(target), (0,2,1))
+        image = self.normalize(image, self.means, self.stds)
+        encoder_tokens = self.encoder(image)
+        target_embeddings = torch.permute(self.embedding(target), (0, 2, 1))
         decoder_tokens = self.decoder(torch.cat((encoder_tokens, target_embeddings), 2))
         return decoder_tokens  # type:ignore
 
@@ -140,7 +140,7 @@ class Encoder(nn.Module):
         tokens = image_to_sequence(image)
         for layer in self.layers:
             tokens = layer(tokens)
-        return tokens # type:ignore
+        return tokens  # type:ignore
 
 
 class Decoder(nn.Module):
@@ -245,7 +245,7 @@ class SSMBlock(nn.Module):
             d_state=cfg["state"],  # SSM state expansion factor, typically 64 or 128
             d_conv=cfg["conv_width"],  # Local convolution width
             expand=cfg["expand"],  # Block expansion factor
-            headdim=cfg["dim"], # d_model needs to be a multiple of headdim
+            headdim=cfg["dim"],  # d_model needs to be a multiple of headdim
             layer_idx=0  # default id for accessing inference cache.
         ))
         self.norm = torch.nn.BatchNorm1d(channels)
