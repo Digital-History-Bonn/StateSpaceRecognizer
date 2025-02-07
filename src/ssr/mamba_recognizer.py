@@ -1,5 +1,6 @@
 """Module for mamba based OCR model."""
 from typing import List, Optional
+from unittest.mock import inplace
 
 import torch
 from torch import nn
@@ -21,7 +22,7 @@ class Recognizer(nn.Module):
         super().__init__()
         self.cfg = cfg
         self.encoder = Encoder(cfg["encoder"])
-        self.embedding = nn.Embedding(cfg["vocab_size"], cfg["encoder"]["block"]["dim"] * self.encoder.expansion_factor)
+        self.embedding = nn.Embedding(cfg["vocab_size"], cfg["encoder"]["block"]["dim"] * self.encoder.expansion_factor, padding_idx=0)
         self.decoder = Decoder(cfg["decoder"], self.encoder.expansion_factor, cfg["vocab_size"])
 
         self.confidence_threshold = cfg["confidence_threshold"]
@@ -102,22 +103,38 @@ class Encoder(nn.Module):
         """Creates ssm layers with an initial downscaling 2d convolution."""
         super().__init__()
         layers: List[int] = cfg["layers"]["num_blocks"]
+
+        channel_1 = 2
         self.conv1 = nn.Conv2d(
             1,
-            2,
+            channel_1,
             kernel_size=7,
             stride=2,
             padding=3,
             bias=False,
         )
+        self.bn1 = torch.nn.BatchNorm1d(channel_1)
+
+        channel_2 = 4
         self.conv2 = nn.Conv2d(
-            2,
-            4,
+            channel_1,
+            channel_2,
             kernel_size=7,
             stride=2,
             padding=3,
             bias=False,
         )
+        self.bn1 = torch.nn.BatchNorm1d(channel_2)
+
+        self.downsample = nn.Sequential(nn.Conv1d(
+            1,
+            channel_2,
+            kernel_size=1,
+            stride=4,
+            bias=False,
+        ), torch.nn.BatchNorm1d(channel_2))
+
+        self.relu = torch.nn.ReLU(inplace=True)
 
         expansion_factor = 1
         self.layers = nn.ModuleList()
@@ -127,6 +144,7 @@ class Encoder(nn.Module):
                 expansion_factor *= 2
         self.expansion_factor = expansion_factor
 
+
     def forward(self, image: torch.Tensor) -> torch.Tensor:
         """
         Executes encoder layers
@@ -135,8 +153,14 @@ class Encoder(nn.Module):
         Returns:
             torch.Tensor: tokens with shape [B,C,L]
         """
+        residual = image.clone()
         image = self.conv1(image)
+        image = self.bn1(image)
         image = self.conv2(image)
+        image = self.bn2(image)
+        residual = self.downsample(residual)
+        image = self.relu(image + residual)
+
         tokens = image_to_sequence(image)
         for layer in self.layers:
             tokens = layer(tokens)
@@ -172,8 +196,8 @@ class Decoder(nn.Module):
 
         for layer in self.layers:
             tokens = layer(tokens)
-        tokens = self.bn(tokens)
         tokens = self.lm_head(tokens)
+        tokens = self.bn(tokens)
         return tokens
 
     def allocate_inference_cache(self, batch_size: int, max_seqlen: int) -> None:
@@ -203,7 +227,16 @@ class SSMLayer(nn.Module):
                 padding=1,
                 bias=False,
             )
+            self.downsample = nn.Sequential(nn.Conv1d(
+                channels,
+                channels * 2,
+                kernel_size=1,
+                stride=2,
+                bias=False,
+            ), torch.nn.BatchNorm1d(channels * 2))
             channels *= 2
+        self.norm = torch.nn.BatchNorm1d(channels)
+        self.relu = torch.nn.ReLU(inplace=True)
         self.blocks = nn.ModuleList()
         for _ in range(num_blocks):
             self.blocks.append(SSMBlock(block_config, channels))
@@ -216,8 +249,13 @@ class SSMLayer(nn.Module):
         Returns:
             tokens: tokens with shape [B,C,L]
         """
+
         if self.downscale:
+            residual = tokens.clone()
             tokens = self.conv(tokens)
+            tokens = self.norm(tokens)
+            residual = self.downsample(residual)
+            tokens = self.relu(tokens + residual)
         for block in self.blocks:
             tokens = block(tokens)
         return tokens
@@ -268,8 +306,8 @@ class SSMBlock(nn.Module):
         tokens = self.ssm(tokens, inference_params=self.inference_params)
         tokens = torch.permute(tokens, (0, 2, 1))
 
-        tokens = self.norm(tokens + residual)
-        tokens = self.feed_forward(tokens)
+        tokens = self.norm(tokens)
+        tokens = self.feed_forward(tokens + residual)
         return tokens
 
     def allocate_inference_cache(self, batch_size: int, max_seqlen: int, dtype: torch.dtype) -> None:
@@ -292,7 +330,9 @@ class FeedForward(torch.nn.Module):
         self.linear_in = torch.nn.Conv1d(model_dim, hidden_dim, 1)
         self.linear_out = torch.nn.Conv1d(hidden_dim, model_dim, 1)
 
-        self.norm = torch.nn.BatchNorm1d(model_dim)
+        self.bn1 = torch.nn.BatchNorm1d(hidden_dim)
+        self.bn2 = torch.nn.BatchNorm1d(model_dim)
+        self.relu = torch.nn.ReLU(inplace=True)
 
     def forward(self, tokens: torch.Tensor) -> torch.Tensor:
         """
@@ -300,6 +340,8 @@ class FeedForward(torch.nn.Module):
         """
         residual = tokens.clone()
         result = self.linear_in(tokens)
-        result = torch.nn.functional.relu(result)
+        result = self.bn1(result)
+        result = self.relu(result)
         result = self.linear_out(result)
-        return self.norm(result + residual)  # type:ignore
+        result = self.bn2(result)
+        return result + residual  # type:ignore
