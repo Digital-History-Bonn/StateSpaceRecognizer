@@ -113,7 +113,7 @@ class Encoder(nn.Module):
             padding=3,
             bias=False,
         )
-        self.bn1 = torch.nn.BatchNorm1d(channel_1)
+        self.bn1 = torch.nn.BatchNorm2d(channel_1)
 
         channel_2 = 4
         self.conv2 = nn.Conv2d(
@@ -124,15 +124,15 @@ class Encoder(nn.Module):
             padding=3,
             bias=False,
         )
-        self.bn1 = torch.nn.BatchNorm1d(channel_2)
+        self.bn2 = torch.nn.BatchNorm2d(channel_2)
 
-        self.downsample = nn.Sequential(nn.Conv1d(
+        self.downsample = nn.Sequential(nn.Conv2d(
             1,
             channel_2,
             kernel_size=1,
             stride=4,
             bias=False,
-        ), torch.nn.BatchNorm1d(channel_2))
+        ), torch.nn.BatchNorm2d(channel_2))
 
         self.relu = torch.nn.ReLU(inplace=True)
 
@@ -182,7 +182,7 @@ class Decoder(nn.Module):
             self.layers.append(SSMLayer(layer, expansion_factor, cfg["layers"]["downscale"], cfg["block"]))
             if cfg["layers"]["downscale"]:
                 expansion_factor *= 2
-        self.bn = torch.nn.BatchNorm1d(cfg["block"]["dim"] * expansion_factor)
+        self.bn = torch.nn.BatchNorm1d(vocab_size)
         self.lm_head = torch.nn.Conv1d(cfg["block"]["dim"] * expansion_factor, vocab_size, 1, bias=False)
 
     def forward(self, tokens: torch.Tensor) -> torch.Tensor:
