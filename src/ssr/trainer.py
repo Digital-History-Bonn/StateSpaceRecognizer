@@ -67,11 +67,16 @@ class SSMOCRTrainer(lightning.LightningModule):
         self.batch_size = batch_size
         self.tokenizer = tokenizer
 
+        for name, param in self.named_parameters():
+            if param.requires_grad:
+                print(name, type(param), param.size())
+
     def training_step(self, batch):
+        self.model.train()
         image, target, _ = batch
         loss, _ = self.run_model(image, target)
-        self.log("train_loss", loss, batch_size=self.batch_size, prog_bar=True, on_epoch=True, on_step=False)
-        loss.requires_grad = True
+        self.log("train_loss", loss.detach().cpu(), batch_size=self.batch_size, prog_bar=True, on_epoch=True,
+                 on_step=True)
         return loss
 
     def run_model(self, image: torch.Tensor, target: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -83,24 +88,29 @@ class SSMOCRTrainer(lightning.LightningModule):
         image = image.cuda()
         target = target.cuda()
         start_token = self.tokenizer.single_token('<START>')
+        pad_token = self.tokenizer.single_token('<PAD>')
 
         pred = self.model(image, target)
         diff = pred.shape[-1] - target.shape[-1]
-        target = torch.cat((torch.full((target.shape[0], diff), start_token).cuda(), target), 1)
+        target = torch.cat((torch.full((target.shape[0], diff - 1), start_token).cuda(), target), 1)
+        target = torch.cat((target, torch.full((target.shape[0], 1), pad_token).cuda()), 1)
         loss = cross_entropy(pred, target)
-        return loss.detach().cpu(), pred[:, diff:, :].detach().cpu()
+        return loss, pred[:, diff:, :].detach().cpu()
 
     def validation_step(self, batch: torch.Tensor):
+        self.model.eval()
         self.evaluate_prediction(batch, "val")
 
     def test_step(self, batch: torch.Tensor):
+        self.model.eval()
         self.evaluate_prediction(batch, "test")
 
     def evaluate_prediction(self, batch: torch.Tensor, name: str):
         image, target, texts = batch
         loss, _ = self.run_model(image, target)
-        self.log(f"{name}_loss", loss, batch_size=self.batch_size, prog_bar=True, on_epoch=True, on_step=False)
+        self.log(f"{name}_loss", loss.detach().cpu(), batch_size=self.batch_size, prog_bar=True, on_epoch=True,
+                 on_step=False)
 
     def configure_optimizers(self):
-        optimizer = optim.AdamW(self.parameters(), lr=1e-3, weight_decay=1e-05)
+        optimizer = optim.AdamW(self.parameters(), lr=1e-04, weight_decay=1e-05)
         return optimizer
