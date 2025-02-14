@@ -288,7 +288,7 @@ class SSMBlock(nn.Module):
         ))
         self.norm = torch.nn.BatchNorm1d(channels)
 
-        self.feed_forward = FeedForward(channels, channels * cfg["expand"])
+        self.feed_forward = FeedForward(channels, channels * 2)
         self.inference_params: Optional[InferenceParams] = None
 
     def forward(self, tokens: torch.Tensor) -> torch.Tensor:
