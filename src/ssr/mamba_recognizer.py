@@ -20,10 +20,11 @@ class Recognizer(nn.Module):
 
     def __init__(self, cfg: dict):
         super().__init__()
+        self.vocab_size = cfg["vocabulary"]["size"]
         self.cfg = cfg
         self.encoder = Encoder(cfg["encoder"])
-        self.embedding = nn.Embedding(cfg["vocab_size"], cfg["encoder"]["block"]["dim"] * self.encoder.expansion_factor, padding_idx=0)
-        self.decoder = Decoder(cfg["decoder"], self.encoder.expansion_factor, cfg["vocab_size"])
+        self.embedding = nn.Embedding(self.vocab_size, cfg["encoder"]["block"]["dim"] * self.encoder.expansion_factor, padding_idx=0)
+        self.decoder = Decoder(cfg["decoder"], self.encoder.expansion_factor, self.vocab_size)
 
         self.confidence_threshold = cfg["confidence_threshold"]
 
