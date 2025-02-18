@@ -92,6 +92,15 @@ class Recognizer(nn.Module):
                 break
         return [tokenizer.to_text(torch.tensor(result)) for result in result_tokens]
 
+    def load(self, path: Optional[str], device: str) -> None:
+        """
+        load the model weights
+        """
+        if path is None:
+            return
+        self.load_state_dict(torch.load(path, map_location=device))
+        self.eval()
+
 
 def image_to_sequence(image: torch.Tensor) -> torch.Tensor:
     """
