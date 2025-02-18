@@ -48,9 +48,18 @@ class Recognizer(nn.Module):
         decoder_tokens = self.decoder(torch.cat((encoder_tokens, target_embeddings), 2))
         return decoder_tokens  # type:ignore
 
-    def generate(self, encoder_tokens: torch.Tensor, batch_size: int, tokenizer: Tokenizer):
+    def inference(self, image: torch.Tensor, batch_size: int, tokenizer: Tokenizer) -> List[str]:
+        """Forward pass for inference. After image encoding the output sequence is generated.
+        Args:
+            image(torch.Tensor): Image data with shape[B,C,H,W]
+            """
+        image = self.normalize(image, self.means, self.stds)
+        encoder_tokens = self.encoder(image)
+        return self.generate(encoder_tokens, batch_size, tokenizer)
+
+    def generate(self, encoder_tokens: torch.Tensor, batch_size: int, tokenizer: Tokenizer) -> List[str]:
         """Generate OCR output at inference time. This is done
-        in an autoregressive way, passing each output back to the model, and ends with an end token.
+        in an autoregressive way, passing each output back to the model, and ends with an end (or padding) token.
         Args:
             encoder_tokens(torch.Tensor): encoder processed tokens with shape [B,C,L]
         """
