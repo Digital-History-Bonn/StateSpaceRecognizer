@@ -43,20 +43,6 @@ def collate_fn(batch):
     return torch.stack(padded_crops), torch.stack(padded_targets), texts
 
 
-def one_hot_encoding(targets: torch.Tensor, dim: int) -> torch.Tensor:
-    """
-    Handels one hot encoding of target to be usable for loss function.
-    Args:
-        targets: targets with shape[B,L]
-        dim: Number of classes.
-    Returns:
-        torch.Tensor: targets with shape [B,C,L]
-    """
-    # pylint: disable-next=not-callable
-    return torch.permute(one_hot(targets, num_classes=dim),
-                         (0, 2, 1))
-
-
 class SSMOCRTrainer(lightning.LightningModule):
     """Lightning module for image recognition training. Predict step returns a source object from the dataset as well as
     the softmax prediction."""
@@ -87,14 +73,13 @@ class SSMOCRTrainer(lightning.LightningModule):
         """
         image = image.cuda()
         target = target.cuda()
-        start_token = self.tokenizer.single_token('<START>')
         pad_token = self.tokenizer.single_token('<PAD>')
 
         pred = self.model(image, target)
         diff = pred.shape[-1] - target.shape[-1]
-        target = torch.cat((torch.full((target.shape[0], diff - 1), start_token).cuda(), target), 1)
+        target = torch.cat((torch.full((target.shape[0], diff - 1), pad_token).cuda(), target), 1)
         target = torch.cat((target, torch.full((target.shape[0], 1), pad_token).cuda()), 1)
-        loss = cross_entropy(pred, target)
+        loss = cross_entropy(pred, target, ignore_index=0)
         return loss, pred[:, diff:, :].detach().cpu()
 
     def validation_step(self, batch: torch.Tensor):
