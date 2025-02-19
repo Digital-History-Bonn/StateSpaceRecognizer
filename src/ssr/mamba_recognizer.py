@@ -23,7 +23,8 @@ class Recognizer(nn.Module):
         self.vocab_size = cfg["vocabulary"]["size"]
         self.cfg = cfg
         self.encoder = Encoder(cfg["encoder"])
-        self.embedding = nn.Embedding(self.vocab_size, cfg["encoder"]["block"]["dim"] * self.encoder.expansion_factor, padding_idx=0)
+        self.embedding = nn.Embedding(self.vocab_size, cfg["encoder"]["block"]["dim"] * self.encoder.expansion_factor,
+                                      padding_idx=0)  #todo: config better
         self.decoder = Decoder(cfg["decoder"], self.encoder.expansion_factor, self.vocab_size)
 
         self.confidence_threshold = cfg["confidence_threshold"]
@@ -123,7 +124,7 @@ class Encoder(nn.Module):
         super().__init__()
         layers: List[int] = cfg["layers"]["num_blocks"]
 
-        channel_1 = 2
+        channel_1 = cfg["channels"][0]
         self.conv1 = nn.Conv2d(
             1,
             channel_1,
@@ -134,7 +135,7 @@ class Encoder(nn.Module):
         )
         self.bn1 = torch.nn.BatchNorm2d(channel_1)
 
-        channel_2 = 4
+        channel_2 = cfg["channels"][1]
         self.conv2 = nn.Conv2d(
             channel_1,
             channel_2,
@@ -155,14 +156,13 @@ class Encoder(nn.Module):
 
         self.relu = torch.nn.ReLU(inplace=True)
 
-        expansion_factor = 1
+        expansion_factor = int(cfg["channels"][1] // 4)  # todo: config better
         self.layers = nn.ModuleList()
         for layer in layers:
             self.layers.append(SSMLayer(layer, expansion_factor, cfg["layers"]["downscale"], cfg["block"]))
             if cfg["layers"]["downscale"]:
                 expansion_factor *= 2
         self.expansion_factor = expansion_factor
-
 
     def forward(self, image: torch.Tensor) -> torch.Tensor:
         """
