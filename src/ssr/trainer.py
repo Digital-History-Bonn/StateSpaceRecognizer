@@ -1,6 +1,11 @@
-from typing import Tuple
+import os
+from multiprocessing.sharedctypes import Synchronized
+from pathlib import Path
+from typing import Tuple, Optional, List
 
+import Levenshtein
 import lightning
+import numpy as np
 import torch
 from torch import optim
 from torch.nn import ConstantPad1d
@@ -8,6 +13,8 @@ from torch.nn.functional import cross_entropy, one_hot
 from torchvision import transforms
 
 from ssr import Tokenizer
+
+from ssr.mamba_recognizer import process_prediction
 
 
 def collate_fn(batch):
@@ -43,15 +50,26 @@ def collate_fn(batch):
     return torch.stack(padded_crops), torch.stack(padded_targets), texts
 
 
+def calculate_ratio(data_list: List[Tuple[int, int]]) -> float:
+    """Calculate ratio from list containing values and lengths."""
+    data_ndarray = np.array(data_list)
+    sums = np.sum(data_ndarray, axis=0)
+    ratio: float = sums[0] / sums[1]
+    return ratio
+
+
 class SSMOCRTrainer(lightning.LightningModule):
     """Lightning module for image recognition training. Predict step returns a source object from the dataset as well as
     the softmax prediction."""
 
-    def __init__(self, model, batch_size: int, tokenizer: Tokenizer):
+    def __init__(self, model, batch_size: int, tokenizer: Tokenizer, device: str,
+                 epoch_log: Optional[Synchronized] = None):
         super().__init__()
         self.model = model
         self.batch_size = batch_size
         self.tokenizer = tokenizer
+        self.device_str = device
+        self.epoch_log = epoch_log
 
         for name, param in self.named_parameters():
             if param.requires_grad:
@@ -71,16 +89,16 @@ class SSMOCRTrainer(lightning.LightningModule):
         the same length as the encoder result. Only after the encoder results have been processed, the actual output
         starts.
         """
-        image = image.cuda()
-        target = target.cuda()
+        image = image.cuda(self.device)
+        target = target.cuda(self.device)
         pad_token = self.tokenizer.single_token('<PAD>')
 
         pred = self.model(image, target)
         diff = pred.shape[-1] - target.shape[-1]
-        target = torch.cat((torch.full((target.shape[0], diff - 1), pad_token).cuda(), target), 1)
-        target = torch.cat((target, torch.full((target.shape[0], 1), pad_token).cuda()), 1)
+        target = torch.cat((torch.full((target.shape[0], diff - 1), pad_token).cuda(self.device), target), 1)
+        target = torch.cat((target, torch.full((target.shape[0], 1), pad_token).cuda(self.device)), 1)
         loss = cross_entropy(pred, target, ignore_index=0)
-        return loss, pred[:, diff:, :].detach().cpu()
+        return loss, pred[:, :, diff - 1:]
 
     def validation_step(self, batch: torch.Tensor):
         self.model.eval()
@@ -92,9 +110,27 @@ class SSMOCRTrainer(lightning.LightningModule):
 
     def evaluate_prediction(self, batch: torch.Tensor, name: str):
         image, target, texts = batch
-        loss, _ = self.run_model(image, target)
-        self.log(f"{name}_loss", loss.detach().cpu(), batch_size=self.batch_size, prog_bar=True, on_epoch=True,
-                 on_step=False)
+        loss, pred = self.run_model(image, target)
+        self.log(f"{name}_loss", loss.detach().cpu(), batch_size=self.batch_size, prog_bar=False)
+        pred = process_prediction(self.tokenizer.single_token('<NAN>'), pred, self.model.confidence_threshold)
+        self.levenshtein_distance(pred, texts, name)
+
+    def levenshtein_distance(self, pred: torch.Tensor, targets: List[str], name: str) -> None:
+        distance_list = []
+        for i in range(len(targets)):
+            pred_line = self.tokenizer.to_text(pred[i])
+            gt_line = targets[i]
+            distance = Levenshtein.distance(gt_line, pred_line)
+            distance_list.append((distance, max(len(gt_line), len(pred_line))))
+        ratio = calculate_ratio(distance_list)
+        self.log(f"{name}_levenshtein", ratio, batch_size=self.batch_size, prog_bar=True, on_epoch=True,
+                 on_step=True)
+
+    def on_train_epoch_end(self):
+        """Logs current epoch to synchronized self.epoch_log to update progress bar over all processes training
+        in parallel."""
+        if self.epoch_log:
+            self.epoch_log.value += 1
 
     def configure_optimizers(self):
         optimizer = optim.AdamW(self.parameters(), lr=1e-04, weight_decay=1e-05)

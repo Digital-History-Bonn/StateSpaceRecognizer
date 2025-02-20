@@ -15,6 +15,15 @@ def create_empty_dict(length: int):
     return {None for _ in range(length)}
 
 
+def process_prediction(nan_token: int, pred: torch.Tensor, threshold: torch.Tensor) -> torch.Tensor:
+    """Applies softmax and extracts token with the highest probability, provided it is above threshold."""
+    result_batch = torch.nn.functional.softmax(pred, dim=1)
+    max_tensor, argmax = torch.max(result_batch, dim=1)
+    argmax = argmax.type(torch.uint8)
+    argmax[max_tensor < threshold] = nan_token
+    return argmax.detach().cpu() # type: ignore
+
+
 class Recognizer(nn.Module):
     """Implements OCR model composed of a visual encoder and a sequence decoder."""
 
@@ -78,12 +87,9 @@ class Recognizer(nn.Module):
         self.decoder.allocate_inference_cache(batch_size, 0)
         self.decoder(encoder_tokens)
         while True:
-            result_batch = torch.nn.functional.softmax(self.decoder(input_batch), dim=1)
+            pred = self.decoder(input_batch)
 
-            max_tensor, argmax = torch.max(result_batch, dim=1)
-            argmax = argmax.type(torch.uint8)
-            argmax[max_tensor < self.confidence_threshold] = nan_token
-            result_tensor = argmax.detach().cpu()  # type: ignore
+            result_tensor = process_prediction(nan_token, pred, self.confidence_threshold)
 
             for i, result in enumerate(result_tensor.tolist()):
                 result_tokens[i] += [result]
@@ -295,6 +301,8 @@ class SSMBlock(nn.Module):
         connected layer."""
         super().__init__()
 
+        self.has_feed_forward = cfg["feed_forward"]
+
         self.ssm = (Mamba2(
             # This module uses roughly 3 * expand * d_model^2 parameters
             # todo: tie channels to expansion and image height
@@ -307,7 +315,8 @@ class SSMBlock(nn.Module):
         ))
         self.norm = torch.nn.BatchNorm1d(channels)
 
-        self.feed_forward = FeedForward(channels, channels * 2)
+        if self.has_feed_forward:
+            self.feed_forward = FeedForward(channels, channels * 2)
         self.inference_params: Optional[InferenceParams] = None
 
     def forward(self, tokens: torch.Tensor) -> torch.Tensor:
@@ -324,9 +333,10 @@ class SSMBlock(nn.Module):
         tokens = torch.permute(tokens, (0, 2, 1))  # mamba block needs shape of [B,L,C]
         tokens = self.ssm(tokens, inference_params=self.inference_params)
         tokens = torch.permute(tokens, (0, 2, 1))
+        tokens = self.norm(tokens) + residual
 
-        tokens = self.norm(tokens)
-        tokens = self.feed_forward(tokens + residual)
+        if self.has_feed_forward:
+            tokens = self.feed_forward(tokens)
         return tokens
 
     def allocate_inference_cache(self, batch_size: int, max_seqlen: int, dtype: torch.dtype) -> None:
