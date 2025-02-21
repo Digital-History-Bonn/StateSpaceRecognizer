@@ -62,18 +62,16 @@ class SSMOCRTrainer(lightning.LightningModule):
     """Lightning module for image recognition training. Predict step returns a source object from the dataset as well as
     the softmax prediction."""
 
-    def __init__(self, model, batch_size: int, tokenizer: Tokenizer, device: str,
-                 epoch_log: Optional[Synchronized] = None):
+    def __init__(self, model, batch_size: int, tokenizer: Tokenizer, device: str):
         super().__init__()
         self.model = model
         self.batch_size = batch_size
         self.tokenizer = tokenizer
         self.device_str = device
-        self.epoch_log = epoch_log
 
-        for name, param in self.named_parameters():
-            if param.requires_grad:
-                print(name, type(param), param.size())
+        # for name, param in self.named_parameters():
+        #     if param.requires_grad:
+        #         print(name, type(param), param.size())
 
     def training_step(self, batch):
         self.model.train()
@@ -120,6 +118,7 @@ class SSMOCRTrainer(lightning.LightningModule):
         for i in range(len(targets)):
             pred_line = self.tokenizer.to_text(pred[i])
             gt_line = targets[i]
+            print(f"pred: {pred_line}\n gt: {gt_line} \n \n")
             distance = Levenshtein.distance(gt_line, pred_line)
             distance_list.append((distance, max(len(gt_line), len(pred_line))))
         ratio = calculate_ratio(distance_list)
