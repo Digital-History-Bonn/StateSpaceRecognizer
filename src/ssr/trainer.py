@@ -95,7 +95,7 @@ class SSMOCRTrainer(lightning.LightningModule):
         diff = pred.shape[-1] - target.shape[-1]
         target = torch.cat((torch.full((target.shape[0], diff - 1), pad_token).cuda(self.device), target), 1)
         target = torch.cat((target, torch.full((target.shape[0], 1), pad_token).cuda(self.device)), 1)
-        loss = cross_entropy(pred, target, ignore_index=0)
+        loss = cross_entropy(pred, target, ignore_index=pad_token)
         return loss, pred[:, :, diff - 1:]
 
     def validation_step(self, batch: torch.Tensor):
@@ -124,12 +124,6 @@ class SSMOCRTrainer(lightning.LightningModule):
         ratio = calculate_ratio(distance_list)
         self.log(f"{name}_levenshtein", ratio, batch_size=self.batch_size, prog_bar=True, on_epoch=True,
                  on_step=True)
-
-    def on_train_epoch_end(self):
-        """Logs current epoch to synchronized self.epoch_log to update progress bar over all processes training
-        in parallel."""
-        if self.epoch_log:
-            self.epoch_log.value += 1
 
     def configure_optimizers(self):
         optimizer = optim.AdamW(self.parameters(), lr=1e-04, weight_decay=1e-05)
