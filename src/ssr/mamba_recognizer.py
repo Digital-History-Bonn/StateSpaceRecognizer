@@ -21,7 +21,7 @@ def process_prediction(nan_token: int, pred: torch.Tensor, threshold: torch.Tens
     max_tensor, argmax = torch.max(result_batch, dim=1)
     argmax = argmax.type(torch.uint8)
     argmax[max_tensor < threshold] = nan_token
-    return argmax.detach().cpu() # type: ignore
+    return argmax.detach().cpu()  # type: ignore
 
 
 class Recognizer(nn.Module):
@@ -33,7 +33,7 @@ class Recognizer(nn.Module):
         self.cfg = cfg
         self.encoder = Encoder(cfg["encoder"])
         self.embedding = nn.Embedding(self.vocab_size, cfg["encoder"]["block"]["dim"] * self.encoder.expansion_factor,
-                                      padding_idx=0)  #todo: config better
+                                      padding_idx=0)  # todo: config better
         self.decoder = Decoder(cfg["decoder"], self.encoder.expansion_factor, self.vocab_size)
 
         self.confidence_threshold = cfg["confidence_threshold"]
@@ -42,6 +42,7 @@ class Recognizer(nn.Module):
         self.register_buffer("means", torch.tensor([0.443]))  # gray scale normalization for image data.
         self.register_buffer("stds", torch.tensor([0.226]))  # todo: put this into model config
         self.normalize = normalize
+        self.device = "cpu"
 
     def forward(self, image: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
         """Forward pass for training with the target sequence as additional input for the decoder, after
@@ -243,6 +244,10 @@ class SSMLayer(nn.Module):
         super().__init__()
         channels = block_config["dim"] * layer_factor
         self.downscale = downscale
+        self.blocks = nn.ModuleList()
+        for _ in range(num_blocks):
+            self.blocks.append(SSMBlock(block_config, channels))
+
         if downscale:
             self.conv = nn.Conv1d(
                 channels,
@@ -260,11 +265,8 @@ class SSMLayer(nn.Module):
                 bias=False,
             ), torch.nn.BatchNorm1d(channels * 2))
             channels *= 2
-        self.norm = torch.nn.BatchNorm1d(channels)
-        self.relu = torch.nn.ReLU(inplace=True)
-        self.blocks = nn.ModuleList()
-        for _ in range(num_blocks):
-            self.blocks.append(SSMBlock(block_config, channels))
+            self.norm = torch.nn.BatchNorm1d(channels)
+            self.relu = torch.nn.ReLU(inplace=True)
 
     def forward(self, tokens: torch.Tensor) -> torch.Tensor:
         """
@@ -274,15 +276,15 @@ class SSMLayer(nn.Module):
         Returns:
             tokens: tokens with shape [B,C,L]
         """
-
+        for block in self.blocks:
+            tokens = block(tokens)
         if self.downscale:
             residual = tokens.clone()
             tokens = self.conv(tokens)
             tokens = self.norm(tokens)
             residual = self.downsample(residual)
             tokens = self.relu(tokens + residual)
-        for block in self.blocks:
-            tokens = block(tokens)
+
         return tokens
 
     def allocate_inference_cache(self, batch_size: int, max_seqlen: int, dtype: torch.dtype) -> None:

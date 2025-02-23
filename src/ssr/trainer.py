@@ -37,7 +37,7 @@ def collate_fn(batch):
 
     for crop, target in zip(crops, targets):
         if crop.shape[-1] < max_width:
-            transform = transforms.Pad((max_width - crop.shape[-1], 0, 0, 0))
+            transform = transforms.Pad((0, 0, max_width - crop.shape[-1], 0))
             padded_crops.append(transform(crop))
         else:
             padded_crops.append(crop)
@@ -62,12 +62,11 @@ class SSMOCRTrainer(lightning.LightningModule):
     """Lightning module for image recognition training. Predict step returns a source object from the dataset as well as
     the softmax prediction."""
 
-    def __init__(self, model, batch_size: int, tokenizer: Tokenizer, device: str):
+    def __init__(self, model, batch_size: int, tokenizer: Tokenizer):
         super().__init__()
         self.model = model
         self.batch_size = batch_size
         self.tokenizer = tokenizer
-        self.device_str = device
 
         # for name, param in self.named_parameters():
         #     if param.requires_grad:
@@ -75,7 +74,14 @@ class SSMOCRTrainer(lightning.LightningModule):
 
     def training_step(self, batch):
         self.model.train()
-        image, target, _ = batch
+        image, target, texts = batch
+        # for i in range(image.shape[0]):
+        #     print(image[i][0].shape)
+        #     pil_image = Image.fromarray((image[i][0] * 255).cpu().numpy().astype(np.uint8))
+        #     pil_image.save(f"output/{i}.png")
+        #     with open(f"output/{i}.json", 'w', encoding='utf-8') as file:
+        #         json.dump([target[i].cpu().tolist(), texts[i]], file)
+        # return
         loss, _ = self.run_model(image, target)
         self.log("train_loss", loss.detach().cpu(), batch_size=self.batch_size, prog_bar=True, on_epoch=True,
                  on_step=True)
@@ -87,6 +93,7 @@ class SSMOCRTrainer(lightning.LightningModule):
         the same length as the encoder result. Only after the encoder results have been processed, the actual output
         starts.
         """
+        self.model.device = self.device
         image = image.cuda(self.device)
         target = target.cuda(self.device)
         pad_token = self.tokenizer.single_token('<PAD>')
@@ -118,9 +125,9 @@ class SSMOCRTrainer(lightning.LightningModule):
         for i in range(len(targets)):
             pred_line = self.tokenizer.to_text(pred[i])
             gt_line = targets[i]
-            print(f"pred: {pred_line}\n gt: {gt_line} \n \n")
+            # print(f"pred: {pred_line}\n gt: {gt_line} \n \n")
             distance = Levenshtein.distance(gt_line, pred_line)
-            distance_list.append((distance, max(len(gt_line), len(pred_line))))
+            distance_list.append((distance, (len(gt_line) + len(pred_line))))
         ratio = calculate_ratio(distance_list)
         self.log(f"{name}_levenshtein", ratio, batch_size=self.batch_size, prog_bar=True, on_epoch=True,
                  on_step=True)
