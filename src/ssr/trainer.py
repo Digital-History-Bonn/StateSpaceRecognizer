@@ -14,7 +14,7 @@ from torchvision import transforms
 
 from ssr import Tokenizer
 
-from ssr.mamba_recognizer import process_prediction
+from ssr.mamba_recognizer import process_prediction, Recognizer
 
 
 def collate_fn(batch):
@@ -62,7 +62,7 @@ class SSMOCRTrainer(lightning.LightningModule):
     """Lightning module for image recognition training. Predict step returns a source object from the dataset as well as
     the softmax prediction."""
 
-    def __init__(self, model, batch_size: int, tokenizer: Tokenizer):
+    def __init__(self, model: Recognizer, batch_size: int, tokenizer: Tokenizer):
         super().__init__()
         self.model = model
         self.batch_size = batch_size
