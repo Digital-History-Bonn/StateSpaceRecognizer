@@ -104,7 +104,6 @@ class Recognizer(nn.Module):
             input_batch =  torch.permute(self.embedding(result_tensor.long().to(self.device)), (0, 2, 1))
 
             if all(end for end in has_ended) or len(result_tokens[0]) >= self.tokenizer.max_length:
-                print(len(result_tokens[0]))
                 break
 
         return [tokenizer.to_text(torch.tensor(result)) for result in result_tokens]
