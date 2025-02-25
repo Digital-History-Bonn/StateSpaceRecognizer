@@ -21,7 +21,7 @@ def process_prediction(nan_token: int, pred: torch.Tensor, threshold: torch.Tens
     max_tensor, argmax = torch.max(result_batch, dim=1)
     argmax = argmax.type(torch.uint8)
     argmax[max_tensor < threshold] = nan_token
-    return argmax.detach().cpu()  # type: ignore
+    return argmax.cpu()  # type: ignore
 
 
 class Recognizer(nn.Module):
@@ -80,7 +80,7 @@ class Recognizer(nn.Module):
         start_token = tokenizer.single_token('<START>')
         end_token = tokenizer.single_token('<END>')
         nan_token = tokenizer.single_token('<NAN>')
-        result_tokens = [[start_token]] * batch_size
+        result_tokens = [[start_token] for _ in range(batch_size)]
         has_ended = [False] * batch_size
         start_embedding =  torch.permute(self.embedding(torch.tensor([start_token]).to(self.device)), (1, 0))
         start_list = []
@@ -98,11 +98,15 @@ class Recognizer(nn.Module):
             for i, result in enumerate(result_tensor.tolist()):
                 result_tokens[i] += result
                 has_ended[i] = True if result[0] == end_token else has_ended[i]
+                if not has_ended[i] and result[0] == nan_token:
+                    nan_generation = all(token == nan_token for token in result_tokens[i][-5:])
+                    has_ended[i] = True if nan_generation else has_ended[i]
             input_batch =  torch.permute(self.embedding(result_tensor.long().to(self.device)), (0, 2, 1))
 
-            if all(end == end_token for end in has_ended) or len(result_tokens[0]) >= self.tokenizer.max_length:
+            if all(end for end in has_ended) or len(result_tokens[0]) >= self.tokenizer.max_length:
                 print(len(result_tokens[0]))
                 break
+
         return [tokenizer.to_text(torch.tensor(result)) for result in result_tokens]
 
     def load(self, path: Optional[str], device: str) -> None:
@@ -340,6 +344,8 @@ class SSMBlock(nn.Module):
         tokens = torch.permute(tokens, (0, 2, 1))  # mamba block needs shape of [B,L,C]
         tokens = self.ssm(tokens, inference_params=self.inference_params)
         tokens = torch.permute(tokens, (0, 2, 1))
+        if self.inference_params:
+            self.inference_params.seqlen_offset += tokens.shape[-1]
         tokens = self.norm(tokens) + residual
 
         if self.has_feed_forward:
