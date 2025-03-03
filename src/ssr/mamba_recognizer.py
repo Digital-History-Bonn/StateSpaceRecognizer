@@ -90,16 +90,17 @@ class Recognizer(nn.Module):
 
         self.decoder.allocate_inference_cache(batch_size, self.tokenizer.max_length)
         self.decoder(encoder_tokens)
-        self.get_tokens(end_token, input_batch, nan_token, result_tokens)
+        result_tokens = self.get_tokens(end_token, input_batch, nan_token)
         return [tokenizer.to_text(torch.tensor(result)) for result in result_tokens]
 
     def get_tokens(self, end_token: int, input_batch: torch.Tensor, nan_token: int,
-                   start_token: int, batch_size:int) -> None:
+                   start_token: int, batch_size:int) -> List[List[int]]:
         """
         Generate tokens autoregressivly. The initial input consists out of start tokens, further inputs for the
         decoder are previous outputs.
         Args:
             input_batch: Tensor of shape [B,C,1] with embedded start tokens.
+        Return:
             result_tokens: List of shape [B,L], where all output tokens generated are inserted.
         """
         has_ended = [False] * batch_size
@@ -119,6 +120,7 @@ class Recognizer(nn.Module):
 
             if all(end for end in has_ended) or len(result_tokens[0]) >= self.tokenizer.max_length:
                 break
+        return result_tokens
 
     def load(self, path: Optional[str], device: str) -> None:
         """
