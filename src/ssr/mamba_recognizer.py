@@ -21,7 +21,7 @@ def process_prediction(nan_token: int, pred: torch.Tensor, threshold: torch.Tens
     max_tensor, argmax = torch.max(result_batch, dim=1)
     argmax = argmax.type(torch.uint8)
     argmax[max_tensor < threshold] = nan_token
-    return argmax.detach().cpu()  # type: ignore
+    return argmax.cpu()  # type: ignore
 
 
 class Recognizer(nn.Module):
@@ -45,6 +45,9 @@ class Recognizer(nn.Module):
         self.normalize = normalize
         self.device = "cpu"
 
+        self.batch_size = cfg["batch_size"]
+        self.tokenizer = None
+
     def forward(self, image: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
         """Forward pass for training with the target sequence as additional input for the decoder, after
         processed through the embedding layer.
@@ -60,14 +63,14 @@ class Recognizer(nn.Module):
         decoder_tokens = self.decoder(torch.cat((encoder_tokens, target_embeddings), 2))
         return decoder_tokens  # type:ignore
 
-    def inference(self, image: torch.Tensor, batch_size: int, tokenizer: Tokenizer) -> List[str]:
+    def inference(self, image: torch.Tensor) -> List[str]:
         """Forward pass for inference. After image encoding the output sequence is generated.
         Args:
             image(torch.Tensor): Image data with shape[B,C,H,W]
             """
         image = self.normalize(image, self.means, self.stds)
         encoder_tokens = self.encoder(image)
-        return self.generate(encoder_tokens, batch_size, tokenizer)
+        return self.generate(encoder_tokens, self.batch_size, self.tokenizer)
 
     def generate(self, encoder_tokens: torch.Tensor, batch_size: int, tokenizer: Tokenizer) -> List[str]:
         """Generate OCR output at inference time. This is done
@@ -78,20 +81,20 @@ class Recognizer(nn.Module):
         start_token = tokenizer.single_token('<START>')
         end_token = tokenizer.single_token('<END>')
         nan_token = tokenizer.single_token('<NAN>')
-        result_tokens = [[start_token]] * batch_size
-        start_token = self.embedding(start_token)
+
+        start_embedding =  torch.permute(self.embedding(torch.tensor([start_token]).to(self.device)), (1, 0))
         start_list = []
         for i in range(batch_size):
-            start_list.append(start_token.clone())
+            start_list.append(start_embedding.clone())
         input_batch = torch.stack(start_list)
 
-        self.decoder.allocate_inference_cache(batch_size, 0)
+        self.decoder.allocate_inference_cache(batch_size, self.tokenizer.max_length)
         self.decoder(encoder_tokens)
         self.get_tokens(end_token, input_batch, nan_token, result_tokens)
         return [tokenizer.to_text(torch.tensor(result)) for result in result_tokens]
 
     def get_tokens(self, end_token: int, input_batch: torch.Tensor, nan_token: int,
-                   result_tokens: List[List[int]]) -> None:
+                   start_token: int, batch_size:int) -> None:
         """
         Generate tokens autoregressivly. The initial input consists out of start tokens, further inputs for the
         decoder are previous outputs.
@@ -99,16 +102,22 @@ class Recognizer(nn.Module):
             input_batch: Tensor of shape [B,C,1] with embedded start tokens.
             result_tokens: List of shape [B,L], where all output tokens generated are inserted.
         """
+        has_ended = [False] * batch_size
+        result_tokens = [[start_token] for _ in range(batch_size)]
         while True:
             pred = self.decoder(input_batch)
 
             result_tensor = process_prediction(nan_token, pred, self.confidence_threshold)
 
             for i, result in enumerate(result_tensor.tolist()):
-                result_tokens[i] += [result]
-            input_batch = self.embedding(result_tensor)
+                result_tokens[i] += result
+                has_ended[i] = True if result[0] == end_token else has_ended[i]
+                if not has_ended[i] and result[0] == nan_token:
+                    nan_generation = all(token == nan_token for token in result_tokens[i][-5:])
+                    has_ended[i] = True if nan_generation else has_ended[i]
+            input_batch =  torch.permute(self.embedding(result_tensor.long().to(self.device)), (0, 2, 1))
 
-            if all(result[-1] == end_token for result in result_tokens):
+            if all(end for end in has_ended) or len(result_tokens[0]) >= self.tokenizer.max_length:
                 break
 
     def load(self, path: Optional[str], device: str) -> None:
@@ -350,6 +359,9 @@ class SSMBlock(nn.Module):
             tokens = torch.permute(tokens, (0, 2, 1))  # mamba block needs shape of [B,L,C]
             tokens = self.ssm(tokens, inference_params=self.inference_params)
             tokens = torch.permute(tokens, (0, 2, 1))
+        if self.inference_params:
+            self.inference_params.seqlen_offset += tokens.shape[-1]
+
         tokens = self.norm(tokens) + residual
 
         if self.has_feed_forward:
