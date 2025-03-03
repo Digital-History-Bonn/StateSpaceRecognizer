@@ -1,18 +1,18 @@
 """Module for mamba based OCR model."""
+import warnings
 from typing import List, Optional
-from unittest.mock import inplace
 
 import torch
 from torch import nn
-from mamba_ssm import Mamba2
-from mamba_ssm.utils.generation import InferenceParams
+
+try:
+    from mamba_ssm import Mamba2  # pylint: disable=import-error
+    from mamba_ssm.utils.generation import InferenceParams  # pylint: disable=import-error
+except ModuleNotFoundError:
+    warnings.warn("Warning: Mamba SSM module not found, skipping import. This is only viable for test setting.")
 from torchvision.transforms.functional import normalize
 
 from ssr.tokenizer import Tokenizer
-
-
-def create_empty_dict(length: int):
-    return {None for _ in range(length)}
 
 
 def process_prediction(nan_token: int, pred: torch.Tensor, threshold: torch.Tensor) -> torch.Tensor:
@@ -28,6 +28,7 @@ class Recognizer(nn.Module):
     """Implements OCR model composed of a visual encoder and a sequence decoder."""
 
     def __init__(self, cfg: dict):
+        """Initialize Recognizer, extracting config values and adding them to attribute."""
         super().__init__()
         self.vocab_size = cfg["vocabulary"]["size"]
         self.cfg = cfg
@@ -74,7 +75,6 @@ class Recognizer(nn.Module):
         Args:
             encoder_tokens(torch.Tensor): encoder processed tokens with shape [B,C,L]
         """
-        # TODO: positional encodings?
         start_token = tokenizer.single_token('<START>')
         end_token = tokenizer.single_token('<END>')
         nan_token = tokenizer.single_token('<NAN>')
@@ -87,6 +87,18 @@ class Recognizer(nn.Module):
 
         self.decoder.allocate_inference_cache(batch_size, 0)
         self.decoder(encoder_tokens)
+        self.get_tokens(end_token, input_batch, nan_token, result_tokens)
+        return [tokenizer.to_text(torch.tensor(result)) for result in result_tokens]
+
+    def get_tokens(self, end_token: int, input_batch: torch.Tensor, nan_token: int,
+                   result_tokens: List[List[int]]) -> None:
+        """
+        Generate tokens autoregressivly. The initial input consists out of start tokens, further inputs for the
+        decoder are previous outputs.
+        Args:
+            input_batch: Tensor of shape [B,C,1] with embedded start tokens.
+            result_tokens: List of shape [B,L], where all output tokens generated are inserted.
+        """
         while True:
             pred = self.decoder(input_batch)
 
@@ -98,7 +110,6 @@ class Recognizer(nn.Module):
 
             if all(result[-1] == end_token for result in result_tokens):
                 break
-        return [tokenizer.to_text(torch.tensor(result)) for result in result_tokens]
 
     def load(self, path: Optional[str], device: str) -> None:
         """
@@ -305,16 +316,19 @@ class SSMBlock(nn.Module):
 
         self.has_feed_forward = cfg["feed_forward"]
 
-        self.ssm = (Mamba2(
-            # This module uses roughly 3 * expand * d_model^2 parameters
-            # todo: tie channels to expansion and image height
-            d_model=channels,  # Model dimension d_model
-            d_state=cfg["state"],  # SSM state expansion factor, typically 64 or 128
-            d_conv=cfg["conv_width"],  # Local convolution width
-            expand=cfg["expand"],  # Block expansion factor
-            headdim=cfg["dim"],  # d_model needs to be a multiple of headdim
-            layer_idx=0  # default id for accessing inference cache.
-        ))
+        self.test = "test" in cfg and cfg["test"]
+
+        if not self.test:
+            self.ssm = (Mamba2(
+                # This module uses roughly 3 * expand * d_model^2 parameters
+                # todo: tie channels to expansion and image height
+                d_model=channels,  # Model dimension d_model
+                d_state=cfg["state"],  # SSM state expansion factor, typically 64 or 128
+                d_conv=cfg["conv_width"],  # Local convolution width
+                expand=cfg["expand"],  # Block expansion factor
+                headdim=cfg["dim"],  # d_model needs to be a multiple of headdim
+                layer_idx=0  # default id for accessing inference cache.
+            ))
         self.norm = torch.nn.BatchNorm1d(channels)
 
         if self.has_feed_forward:
@@ -332,9 +346,10 @@ class SSMBlock(nn.Module):
 
         residual = tokens.clone()
 
-        tokens = torch.permute(tokens, (0, 2, 1))  # mamba block needs shape of [B,L,C]
-        tokens = self.ssm(tokens, inference_params=self.inference_params)
-        tokens = torch.permute(tokens, (0, 2, 1))
+        if not self.test:
+            tokens = torch.permute(tokens, (0, 2, 1))  # mamba block needs shape of [B,L,C]
+            tokens = self.ssm(tokens, inference_params=self.inference_params)
+            tokens = torch.permute(tokens, (0, 2, 1))
         tokens = self.norm(tokens) + residual
 
         if self.has_feed_forward:

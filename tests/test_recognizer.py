@@ -1,6 +1,5 @@
 """Test module for the mamba ssm recognizer."""
 import os
-from abc import ABC
 from pathlib import Path
 
 import pytest
@@ -19,10 +18,12 @@ class TestRecognizer:
     def setup(self):
         # Initialize shared attributes once for the class
         pytest.ressource_path = Path(os.path.join(os.path.dirname(__file__), "ressources"))
-        with open(pytest.ressource_path / "recognizer.yml", "r") as file:
+        with open(pytest.ressource_path / "recognizer.yml", "r", encoding="utf-8") as file:
             pytest.cfg = yaml.safe_load(file)
         pytest.tokenizer = TestTokenizer()
-        pytest.recognizer = Recognizer(pytest.cfg, pytest.tokenizer).cuda()
+        pytest.cfg["encoder"]["block"]["test"] = True
+        pytest.cfg["decoder"]["block"]["test"] = True
+        pytest.recognizer = Recognizer(pytest.cfg).cuda()
 
     def test_image_to_sequence(self):
         """Image to sequence conversion is done by flattening the C and H dimension of an [B,C,H,W] image.
@@ -44,7 +45,7 @@ class TestRecognizer:
         ground_truth = (1, model_dim, 17)
 
         data = torch.zeros(ground_truth)
-        ff = FeedForward(model_dim=model_dim, hidden_dim=model_dim*8)
+        ff = FeedForward(model_dim=model_dim, hidden_dim=model_dim * 8)
         result = ff(data)
         assert result.shape == ground_truth
 
@@ -90,11 +91,11 @@ class TestRecognizer:
 
 
 class TestTokenizer(Tokenizer):
+    """Test Tokenizer with a small test alphabet and simple inefficient conversion methods."""
     def __init__(self):
         alphabet = ['<PAD>', '<START>', '<NAN>', '<END>', 'a', 'b', 'c']
         super().__init__({token: i for i, token in enumerate(alphabet)})
         self.alphabet = dict(enumerate(alphabet))
-
 
     def __call__(self, text: str) -> torch.Tensor:
         """
@@ -117,16 +118,16 @@ class TestTokenizer(Tokenizer):
         """
         return len(self.alphabet)
 
-    def single_token(self, input: str) -> int:
+    def single_token(self, input_str: str) -> int:
         """
         Tokenizes a single character. This can include returning the index of a start, end or nan token.
         Args:
-            input(str): text to be tokenized.
+            input_str(str): text to be tokenized.
 
         Returns:
             int: token id.
         """
-        return self.alphabet.index(input)
+        return self.alphabet.index(input_str)  # type: ignore
 
     def single_token_to_text(self, token_id: int) -> str:
         """

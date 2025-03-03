@@ -5,7 +5,7 @@ import nox
 @nox.session(name="test")
 def run_test(session):
     """Run pytest."""
-    session.install(".")
+    session.install(".[dev]")
     session.install("pytest")
     session.run("pytest")
 
@@ -25,8 +25,7 @@ def lint(session):
     session.install("pylint")
     session.run("pylint",
                 "src/ssr",
-                "tests",
-                "script")
+                "tests")
 
 
 @nox.session(name="typing")
@@ -54,8 +53,8 @@ def format(session):
     """Fix common convention problems automatically."""
     session.install("black")
     session.install("isort")
-    session.run("isort", "src", "script", "tests", "noxfile.py")
-    session.run("black", "src", "script", "tests", "noxfile.py")
+    session.run("isort", "src", "tests", "noxfile.py")
+    session.run("black", "src", "tests", "noxfile.py")
 
 
 @nox.session(name="coverage")

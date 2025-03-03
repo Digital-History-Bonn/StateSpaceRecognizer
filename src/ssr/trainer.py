@@ -1,7 +1,5 @@
-import os
-from multiprocessing.sharedctypes import Synchronized
-from pathlib import Path
-from typing import Tuple, Optional, List
+"""Module for training related functions and the lightning module for the training setting."""
+from typing import Tuple, Optional, List, Any
 
 import Levenshtein
 import lightning
@@ -9,7 +7,7 @@ import numpy as np
 import torch
 from torch import optim
 from torch.nn import ConstantPad1d
-from torch.nn.functional import cross_entropy, one_hot
+from torch.nn.functional import cross_entropy
 from torchvision import transforms
 
 from ssr import Tokenizer
@@ -17,24 +15,23 @@ from ssr import Tokenizer
 from ssr.mamba_recognizer import process_prediction
 
 
-def collate_fn(batch):
+def collate_fn(batch: Tuple[List[torch.Tensor], ...]) -> Tuple[torch.Tensor, torch.Tensor, List[str]]:
     """Custom collate function, that pads crops horizontally to fit them all in one tensor batch."""
     crops, targets, texts = zip(*batch)
 
-    max_width = 0
-    max_length = 0
+    max_length, max_width = get_max_size(crops, targets) # type: ignore
+    padded_crops, padded_targets = pad_data(crops, max_length, max_width, targets) # type: ignore
+
+    return torch.stack(padded_crops), torch.stack(padded_targets), texts # type: ignore
+
+
+def pad_data(crops: List[torch.Tensor], max_length: int, max_width: int, targets: List[torch.Tensor]) -> tuple[list[Any], list[Any]]:
+    """
+    Pad crops and targets respectively to match the largest width/length and enable stacking them to an input and
+    target tensor with all data of this batch.
+    """
     padded_crops = []
     padded_targets = []
-
-    for crop, target in zip(crops, targets):
-        width = crop.shape[-1]
-        if width > max_width:
-            max_width = width
-
-        length = len(target)
-        if length > max_length:
-            max_length = length
-
     for crop, target in zip(crops, targets):
         if crop.shape[-1] < max_width:
             transform = transforms.Pad((0, 0, max_width - crop.shape[-1], 0))
@@ -47,7 +44,27 @@ def collate_fn(batch):
             padded_targets.append(transform(target))
         else:
             padded_targets.append(target)
-    return torch.stack(padded_crops), torch.stack(padded_targets), texts
+    return padded_crops, padded_targets
+
+
+def get_max_size(crops: List[torch.Tensor], targets: List[torch.Tensor]) -> Tuple[int, int]:
+    """
+    Determine maximum crop width and target length.
+    Args:
+        targets (List[torch.Tensor]): List of tensors shape [L]
+        crops (List[torch.Tensor]): List of tensors shape [1,H,W]
+    """
+    max_width = 0
+    max_length = 0
+    for crop, target in zip(crops, targets):
+        width = crop.shape[-1]
+        if width > max_width:
+            max_width = width
+
+        length = len(target)
+        if length > max_length:
+            max_length = length
+    return max_length, max_width
 
 
 def calculate_ratio(data_list: List[Tuple[int, int]]) -> float:
@@ -68,20 +85,9 @@ class SSMOCRTrainer(lightning.LightningModule):
         self.batch_size = batch_size
         self.tokenizer = tokenizer
 
-        # for name, param in self.named_parameters():
-        #     if param.requires_grad:
-        #         print(name, type(param), param.size())
-
-    def training_step(self, batch):
+    def training_step(self, batch, _):
         self.model.train()
-        image, target, texts = batch
-        # for i in range(image.shape[0]):
-        #     print(image[i][0].shape)
-        #     pil_image = Image.fromarray((image[i][0] * 255).cpu().numpy().astype(np.uint8))
-        #     pil_image.save(f"output/{i}.png")
-        #     with open(f"output/{i}.json", 'w', encoding='utf-8') as file:
-        #         json.dump([target[i].cpu().tolist(), texts[i]], file)
-        # return
+        image, target, _ = batch
         loss, _ = self.run_model(image, target)
         self.log("train_loss", loss.detach().cpu(), batch_size=self.batch_size, prog_bar=True, on_epoch=True,
                  on_step=True)
@@ -105,15 +111,19 @@ class SSMOCRTrainer(lightning.LightningModule):
         loss = cross_entropy(pred, target, ignore_index=pad_token)
         return loss, pred[:, :, diff - 1:]
 
-    def validation_step(self, batch: torch.Tensor):
+    def validation_step(self, batch: torch.Tensor, _):
+        """Evaluate validation dataset"""
         self.model.eval()
         self.evaluate_prediction(batch, "val")
 
-    def test_step(self, batch: torch.Tensor):
+    def test_step(self, batch: torch.Tensor, _):
+        """Evaluate test dataset"""
         self.model.eval()
         self.evaluate_prediction(batch, "test")
 
     def evaluate_prediction(self, batch: torch.Tensor, name: str):
+        """Evaluate input batch and log with supplied name tag.
+        Predicts model, converts output tokens to text and calculates levenshtein distance."""
         image, target, texts = batch
         loss, pred = self.run_model(image, target)
         self.log(f"{name}_loss", loss.detach().cpu(), batch_size=self.batch_size, prog_bar=False)
@@ -121,10 +131,12 @@ class SSMOCRTrainer(lightning.LightningModule):
         self.levenshtein_distance(pred, texts, name)
 
     def levenshtein_distance(self, pred: torch.Tensor, targets: List[str], name: str) -> None:
+        """Calculate Levenshtein distance between prediction and targets for each line. Distance is then averaged per
+        character."""
         distance_list = []
-        for i in range(len(targets)):
+        for target, i in enumerate(targets):
             pred_line = self.tokenizer.to_text(pred[i])
-            gt_line = targets[i]
+            gt_line = targets
             # print(f"pred: {pred_line}\n gt: {gt_line} \n \n")
             distance = Levenshtein.distance(gt_line, pred_line)
             distance_list.append((distance, (len(gt_line) + len(pred_line))))
@@ -133,5 +145,6 @@ class SSMOCRTrainer(lightning.LightningModule):
                  on_step=True)
 
     def configure_optimizers(self):
-        optimizer = optim.AdamW(self.parameters(), lr=1e-04, weight_decay=1e-05)
+        """Configure AdamW optimizer from config."""
+        optimizer = optim.AdamW(self.parameters(), lr=1e-04, weight_decay=1e-05) #todo: add config
         return optimizer
