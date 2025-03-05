@@ -13,7 +13,7 @@ def run_test(session):
 @nox.session(name="fast-test")
 def run_test_fast(session):
     """Run pytest."""
-    session.install(".")
+    session.install(".[dev]")
     session.install("pytest")
     session.run("pytest", "-m", "not slow")
 
@@ -21,7 +21,7 @@ def run_test_fast(session):
 @nox.session(name="lint")
 def lint(session):
     """Check code conventions."""
-    session.install(".")
+    session.install(".[dev]")
     session.install("pylint")
     session.run("pylint",
                 "src/ssr",
@@ -31,7 +31,7 @@ def lint(session):
 @nox.session(name="typing")
 def mypy(session):
     """Check type hints."""
-    session.install(".")
+    session.install(".[dev]")
     session.install("mypy")
     session.run(
         "mypy",
@@ -60,7 +60,7 @@ def format(session):
 @nox.session(name="coverage")
 def check_coverage(session):
     """Check test coverage and generate a html report."""
-    session.install(".")
+    session.install(".[dev]")
     session.install("pytest")
     session.install("coverage")
     try:

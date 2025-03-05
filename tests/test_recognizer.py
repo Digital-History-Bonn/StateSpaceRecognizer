@@ -24,7 +24,7 @@ class TestRecognizer:
         pytest.cfg["vocabulary"]["size"] = len(pytest.tokenizer)
         pytest.cfg["encoder"]["block"]["test"] = True
         pytest.cfg["decoder"]["block"]["test"] = True
-        pytest.recognizer = Recognizer(pytest.cfg).cuda()
+        pytest.recognizer = Recognizer(pytest.cfg)
 
     def test_image_to_sequence(self):
         """Image to sequence conversion is done by flattening the C and H dimension of an [B,C,H,W] image.
@@ -54,14 +54,14 @@ class TestRecognizer:
         """Test the SSMLayer forward pass. One test for the encoder version with downscaling and one for the decoder
         version without downscaling."""
         shape = (2, 32, 50)
-        input_data = torch.ones(shape).cuda()
+        input_data = torch.ones(shape)
 
         result = pytest.recognizer.encoder.layers[0](input_data)
 
         assert result.shape == (2, 64, 25)
 
         shape = (2, 256, 7)
-        input_data = torch.ones(shape).cuda()
+        input_data = torch.ones(shape)
 
         result = pytest.recognizer.decoder.layers[0](input_data)
 
@@ -70,7 +70,7 @@ class TestRecognizer:
     def test_encoder(self):
         """Test the encoder forward pass."""
         shape = (2, 1, 32, 200)
-        input_data = torch.ones(shape).cuda()
+        input_data = torch.ones(shape)
 
         result = pytest.recognizer.encoder(input_data)
 
@@ -80,8 +80,8 @@ class TestRecognizer:
         """Test the recognizer forward pass."""
         torch.manual_seed(42)
         shape = (2, 1, 32, 200)
-        input_data = torch.ones(shape).cuda()
-        target = torch.tensor([[5, 5, 4, 4, 6, 6], [5, 4, 4, 4, 5, 6]]).cuda()
+        input_data = torch.ones(shape)
+        target = torch.tensor([[5, 5, 4, 4, 6, 6], [5, 4, 4, 4, 5, 6]])
 
         result = torch.argmax(torch.nn.functional.softmax(pytest.recognizer(input_data, target), dim=1), dim=1)
         result_batch = [pytest.tokenizer.to_text(result[0]), pytest.tokenizer.to_text(result[1])]
