@@ -1,6 +1,6 @@
 """Module for mamba based OCR model."""
 import warnings
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 import torch
 from torch import nn
@@ -32,20 +32,22 @@ class Recognizer(nn.Module):
         super().__init__()
         self.vocab_size = cfg["vocabulary"]["size"]
         self.cfg = cfg
-        self.encoder = Encoder(cfg["encoder"])
-        self.embedding = nn.Embedding(self.vocab_size, cfg["encoder"]["block"]["dim"] * self.encoder.expansion_factor,
-                                      padding_idx=0)  # todo: config better
-        self.decoder = Decoder(cfg["decoder"], self.encoder.expansion_factor, self.vocab_size)
+        self.cfg["encoder"]["block"]["dim"] = self.cfg["encoder"]["input_dimension"]
+        self.encoder = Encoder(self.cfg["encoder"])
+        self.embedding = nn.Embedding(self.vocab_size, self.cfg["encoder"]["input_dimension"] *
+                                      self.encoder.expansion_factor, padding_idx=0)
+        self.cfg["decoder"]["block"]["dim"] = self.cfg["encoder"]["input_dimension"]
+        self.decoder = Decoder(self.cfg["decoder"], self.encoder.expansion_factor, self.vocab_size)
 
-        self.confidence_threshold = cfg["confidence_threshold"]
+        self.confidence_threshold = self.cfg["confidence_threshold"]
 
         # initialize normalization
         self.register_buffer("means", torch.tensor([0.443]))  # gray scale normalization for image data.
-        self.register_buffer("stds", torch.tensor([0.226]))  # todo: put this into model config
+        self.register_buffer("stds", torch.tensor([0.226]))
         self.normalize = normalize
         self.device = "cpu"
 
-        self.batch_size = cfg["batch_size"]
+        self.batch_size = self.cfg["inference"]["batch_size"]
         self.tokenizer = None
 
     def forward(self, image: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
@@ -78,43 +80,39 @@ class Recognizer(nn.Module):
         Args:
             encoder_tokens(torch.Tensor): encoder processed tokens with shape [B,C,L]
         """
-        start_token = tokenizer.single_token('<START>')
-        end_token = tokenizer.single_token('<END>')
-        nan_token = tokenizer.single_token('<NAN>')
+        tokens = tokenizer.single_token('<START>'), tokenizer.single_token('<NAN>'), tokenizer.single_token('<END>')
 
-        start_embedding =  torch.permute(self.embedding(torch.tensor([start_token]).to(self.device)), (1, 0))
+        start_embedding =  torch.permute(self.embedding(torch.tensor([tokens[0]]).to(self.device)), (1, 0))
         start_list = []
-        for i in range(batch_size):
+        for _ in range(batch_size):
             start_list.append(start_embedding.clone())
         input_batch = torch.stack(start_list)
 
         self.decoder.allocate_inference_cache(batch_size, self.tokenizer.max_length)
         self.decoder(encoder_tokens)
-        result_tokens = self.get_tokens(end_token, input_batch, nan_token)
+        result_tokens = self.get_tokens(tokens, input_batch, batch_size)
         return [tokenizer.to_text(torch.tensor(result)) for result in result_tokens]
 
-    def get_tokens(self, end_token: int, input_batch: torch.Tensor, nan_token: int,
-                   start_token: int, batch_size:int) -> List[List[int]]:
+    def get_tokens(self, tokens: Tuple[int, int, int], input_batch: torch.Tensor, batch_size:int) -> List[List[int]]:
         """
         Generate tokens autoregressivly. The initial input consists out of start tokens, further inputs for the
         decoder are previous outputs.
         Args:
+            tokens: Tuple with start, nan and end token ids.
             input_batch: Tensor of shape [B,C,1] with embedded start tokens.
         Return:
             result_tokens: List of shape [B,L], where all output tokens generated are inserted.
         """
         has_ended = [False] * batch_size
-        result_tokens = [[start_token] for _ in range(batch_size)]
+        result_tokens = [[tokens[0]] for _ in range(batch_size)]
         while True:
-            pred = self.decoder(input_batch)
-
-            result_tensor = process_prediction(nan_token, pred, self.confidence_threshold)
+            result_tensor = process_prediction(tokens[1], self.decoder(input_batch), self.confidence_threshold)
 
             for i, result in enumerate(result_tensor.tolist()):
                 result_tokens[i] += result
-                has_ended[i] = True if result[0] == end_token else has_ended[i]
-                if not has_ended[i] and result[0] == nan_token:
-                    nan_generation = all(token == nan_token for token in result_tokens[i][-5:])
+                has_ended[i] = True if result[0] == tokens[2] else has_ended[i]
+                if not has_ended[i] and result[0] == tokens[1]:
+                    nan_generation = all(token == tokens[1] for token in result_tokens[i][-5:])
                     has_ended[i] = True if nan_generation else has_ended[i]
             input_batch =  torch.permute(self.embedding(result_tensor.long().to(self.device)), (0, 2, 1))
 
@@ -185,12 +183,12 @@ class Encoder(nn.Module):
 
         self.relu = torch.nn.ReLU(inplace=True)
 
-        expansion_factor = int(cfg["channels"][1] // 4)  # todo: config better
+        expansion_factor = int(cfg["channels"][1] // 4)  # Division by four is needed, because of downscaling twice.
         self.layers = nn.ModuleList()
         for layer in layers:
-            self.layers.append(SSMLayer(layer, expansion_factor, cfg["layers"]["downscale"], cfg["block"]))
-            if cfg["layers"]["downscale"]:
-                expansion_factor *= 2
+            self.layers.append(SSMLayer(layer, expansion_factor, cfg["layers"]["downscale_expand"], cfg["block"]))
+            if cfg["layers"]["downscale_expand"]:
+                expansion_factor *= cfg["layers"]["downscale_expand"]
         self.expansion_factor = expansion_factor
 
     def forward(self, image: torch.Tensor) -> torch.Tensor:
@@ -227,9 +225,9 @@ class Decoder(nn.Module):
         self.layers = nn.ModuleList()
         expansion_factor = encoder_expansion
         for layer in layers:
-            self.layers.append(SSMLayer(layer, expansion_factor, cfg["layers"]["downscale"], cfg["block"]))
-            if cfg["layers"]["downscale"]:
-                expansion_factor *= 2
+            self.layers.append(SSMLayer(layer, expansion_factor, cfg["layers"]["downscale_expand"], cfg["block"]))
+            if cfg["layers"]["downscale_expand"]:
+                expansion_factor *= cfg["layers"]["downscale_expand"]
         self.bn = torch.nn.BatchNorm1d(vocab_size)
         self.lm_head = torch.nn.Conv1d(cfg["block"]["dim"] * expansion_factor, vocab_size, 1, bias=False)
 
@@ -273,7 +271,7 @@ class SSMLayer(nn.Module):
         if downscale:
             self.conv = nn.Conv1d(
                 channels,
-                channels * 2,
+                channels * downscale,
                 kernel_size=3,
                 stride=2,
                 padding=1,
@@ -281,12 +279,12 @@ class SSMLayer(nn.Module):
             )
             self.downsample = nn.Sequential(nn.Conv1d(
                 channels,
-                channels * 2,
+                channels * downscale,
                 kernel_size=1,
                 stride=2,
                 bias=False,
-            ), torch.nn.BatchNorm1d(channels * 2))
-            channels *= 2
+            ), torch.nn.BatchNorm1d(channels * downscale))
+            channels *= downscale
             self.norm = torch.nn.BatchNorm1d(channels)
             self.relu = torch.nn.ReLU(inplace=True)
 
@@ -325,14 +323,13 @@ class SSMBlock(nn.Module):
         connected layer."""
         super().__init__()
 
-        self.has_feed_forward = cfg["feed_forward"]
+        self.feed_forward_expand = cfg["feed_forward_expand"]
 
         self.test = "test" in cfg and cfg["test"]
 
         if not self.test:
             self.ssm = (Mamba2(
                 # This module uses roughly 3 * expand * d_model^2 parameters
-                # todo: tie channels to expansion and image height
                 d_model=channels,  # Model dimension d_model
                 d_state=cfg["state"],  # SSM state expansion factor, typically 64 or 128
                 d_conv=cfg["conv_width"],  # Local convolution width
@@ -342,8 +339,8 @@ class SSMBlock(nn.Module):
             ))
         self.norm = torch.nn.BatchNorm1d(channels)
 
-        if self.has_feed_forward:
-            self.feed_forward = FeedForward(channels, channels * 2)
+        if self.feed_forward_expand:
+            self.feed_forward = FeedForward(channels, channels * self.feed_forward_expand)
         self.inference_params: Optional[InferenceParams] = None
 
     def forward(self, tokens: torch.Tensor) -> torch.Tensor:
@@ -366,7 +363,7 @@ class SSMBlock(nn.Module):
 
         tokens = self.norm(tokens) + residual
 
-        if self.has_feed_forward:
+        if self.feed_forward_expand:
             tokens = self.feed_forward(tokens)
         return tokens
 

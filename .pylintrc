@@ -1,6 +1,6 @@
 [MASTER]
 ignore=migrations
-disable=invalid-name
+disable=invalid-name, arguments-differ
 
 [MAIN]
 

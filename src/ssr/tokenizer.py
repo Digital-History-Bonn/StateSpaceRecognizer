@@ -34,11 +34,11 @@ class Tokenizer(ABC):
         """Returns length of alphabet."""
 
     @abstractmethod
-    def single_token(self, input: str) -> int:
+    def single_token(self, input_str: str) -> int:
         """
         Tokenizes a single character. This can include returning the index of a start, end or nan token.
         Args:
-            input(str): text to be tokenized.
+            input_str(str): text to be tokenized.
 
         Returns:
             int: token id.

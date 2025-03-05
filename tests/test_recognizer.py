@@ -2,7 +2,7 @@
 import os
 from pathlib import Path
 
-import pytest
+import pytest # pylint: disable=import-error
 import torch
 import yaml
 
@@ -16,11 +16,12 @@ class TestRecognizer:
 
     @pytest.fixture(scope='class', autouse=True)
     def setup(self):
-        # Initialize shared attributes once for the class
+        """Initialize shared attributes once for the class"""
         pytest.ressource_path = Path(os.path.join(os.path.dirname(__file__), "ressources"))
         with open(pytest.ressource_path / "recognizer.yml", "r", encoding="utf-8") as file:
             pytest.cfg = yaml.safe_load(file)
         pytest.tokenizer = TestTokenizer()
+        pytest.cfg["vocabulary"]["size"] = len(pytest.tokenizer)
         pytest.cfg["encoder"]["block"]["test"] = True
         pytest.cfg["decoder"]["block"]["test"] = True
         pytest.recognizer = Recognizer(pytest.cfg).cuda()

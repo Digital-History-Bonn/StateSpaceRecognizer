@@ -1,5 +1,5 @@
 """Module for training related functions and the lightning module for the training setting."""
-from typing import Tuple, Optional, List, Any
+from typing import Tuple, List, Any
 
 import Levenshtein
 import lightning
@@ -8,6 +8,7 @@ import torch
 from torch import optim
 from torch.nn import ConstantPad1d
 from torch.nn.functional import cross_entropy
+from torch.optim import Optimizer
 from torchvision import transforms
 
 from ssr import Tokenizer
@@ -19,13 +20,14 @@ def collate_fn(batch: Tuple[List[torch.Tensor], ...]) -> Tuple[torch.Tensor, tor
     """Custom collate function, that pads crops horizontally to fit them all in one tensor batch."""
     crops, targets, texts = zip(*batch)
 
-    max_length, max_width = get_max_size(crops, targets) # type: ignore
-    padded_crops, padded_targets = pad_data(crops, max_length, max_width, targets) # type: ignore
+    max_length, max_width = get_max_size(crops, targets)  # type: ignore
+    padded_crops, padded_targets = pad_data(crops, max_length, max_width, targets)  # type: ignore
 
-    return torch.stack(padded_crops), torch.stack(padded_targets), texts # type: ignore
+    return torch.stack(padded_crops), torch.stack(padded_targets), texts  # type: ignore
 
 
-def pad_data(crops: List[torch.Tensor], max_length: int, max_width: int, targets: List[torch.Tensor]) -> tuple[list[Any], list[Any]]:
+def pad_data(crops: List[torch.Tensor], max_length: int, max_width: int, targets: List[torch.Tensor]) \
+        -> tuple[list[Any], list[Any]]:
     """
     Pad crops and targets respectively to match the largest width/length and enable stacking them to an input and
     target tensor with all data of this batch.
@@ -58,12 +60,10 @@ def get_max_size(crops: List[torch.Tensor], targets: List[torch.Tensor]) -> Tupl
     max_length = 0
     for crop, target in zip(crops, targets):
         width = crop.shape[-1]
-        if width > max_width:
-            max_width = width
+        max_width = max(max_width, width)
 
         length = len(target)
-        if length > max_length:
-            max_length = length
+        max_length = max(max_length, length)
     return max_length, max_width
 
 
@@ -79,13 +79,14 @@ class SSMOCRTrainer(lightning.LightningModule):
     """Lightning module for image recognition training. Predict step returns a source object from the dataset as well as
     the softmax prediction."""
 
-    def __init__(self, model: Recognizer, batch_size: int, tokenizer: Tokenizer):
+    def __init__(self, model: Recognizer, batch_size: int, tokenizer: Tokenizer, hyper_parameters: dict) -> None:
         super().__init__()
         self.model = model
         self.batch_size = batch_size
         self.tokenizer = tokenizer
+        self.hyper_parameters = hyper_parameters
 
-    def training_step(self, batch, _):
+    def training_step(self, batch: torch.Tensor) -> torch.Tensor:
         self.model.train()
         image, target, _ = batch
         loss, _ = self.run_model(image, target)
@@ -111,17 +112,17 @@ class SSMOCRTrainer(lightning.LightningModule):
         loss = cross_entropy(pred, target, ignore_index=pad_token)
         return loss, pred[:, :, diff - 1:]
 
-    def validation_step(self, batch: torch.Tensor, _):
+    def validation_step(self, batch: torch.Tensor) -> None:
         """Evaluate validation dataset"""
         self.model.eval()
         self.evaluate_prediction(batch, "val")
 
-    def test_step(self, batch: torch.Tensor, _):
+    def test_step(self, batch: torch.Tensor) -> None:
         """Evaluate test dataset"""
         self.model.eval()
         self.evaluate_prediction(batch, "test")
 
-    def evaluate_prediction(self, batch: torch.Tensor, name: str):
+    def evaluate_prediction(self, batch: torch.Tensor, name: str) -> None:
         """Evaluate input batch and log with supplied name tag.
         Predicts model, converts output tokens to text and calculates levenshtein distance."""
         image, target, texts = batch
@@ -134,17 +135,17 @@ class SSMOCRTrainer(lightning.LightningModule):
         """Calculate Levenshtein distance between prediction and targets for each line. Distance is then averaged per
         character."""
         distance_list = []
-        for target, i in enumerate(targets):
+        for i, target in enumerate(targets):
             pred_line = self.tokenizer.to_text(pred[i])
-            gt_line = targets
+            gt_line = target
             # print(f"pred: {pred_line}\n gt: {gt_line} \n \n")
-            distance = Levenshtein.distance(gt_line, pred_line)
-            distance_list.append((distance, (len(gt_line) + len(pred_line))))
+            distance_list.append((Levenshtein.distance(gt_line, pred_line), (len(gt_line) + len(pred_line))))
         ratio = calculate_ratio(distance_list)
         self.log(f"{name}_levenshtein", ratio, batch_size=self.batch_size, prog_bar=True, on_epoch=True,
                  on_step=True)
 
-    def configure_optimizers(self):
+    def configure_optimizers(self) -> Optimizer:
         """Configure AdamW optimizer from config."""
-        optimizer = optim.AdamW(self.parameters(), lr=1e-04, weight_decay=1e-05) #todo: add config
+        optimizer = optim.AdamW(self.parameters(), lr=self.hyper_parameters["learning_rate"],
+                                weight_decay=self.hyper_parameters["weight_decay"])
         return optimizer
